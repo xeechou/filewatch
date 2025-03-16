@@ -321,6 +321,7 @@ namespace filewatch {
             int _file_fd = -1;
             struct timespec _last_modification_time = {};
             FSEventStreamRef _directory;
+            dispatch_queue_t _queue;
             // fd for single file
 #endif // FILEWATCH_PLATFORM_MAC
 
@@ -372,6 +373,8 @@ namespace filewatch {
                   if (_run_loop) {
                         CFRunLoopStop(_run_loop);
                   }
+                  // Clean up
+                  dispatch_release(queue);
 #endif // __unix__
 
 			_cv.notify_all();
@@ -1204,13 +1207,16 @@ namespace filewatch {
             }
 
             void monitor_directory() {
-                  _run_loop = CFRunLoopGetCurrent();
-                  FSEventStreamScheduleWithRunLoop(_directory, 
-                        _run_loop, 
-                        kCFRunLoopDefaultMode);
-                  FSEventStreamStart(_directory);
-                  _running.set_value();
-                  CFRunLoopRun();
+                // Create a dispatch queue for the event stream
+                _queue = dispatch_queue_create("com.filewatch.queue", DISPATCH_QUEUE_SERIAL);
+
+                // Schedule the event stream with the dispatch queue
+                FSEventStreamSetDispatchQueue(_directory, queue);
+                FSEventStreamStart(_directory);
+                _running.set_value();
+
+                // Keep the run loop running
+                CFRunLoopRun();
             }
 #endif // FILEWATCH_PLATFORM_MAC
 

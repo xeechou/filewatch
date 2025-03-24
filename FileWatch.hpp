@@ -93,6 +93,7 @@ extern "C" int __getdirentries64(int, char *, int, long *);
 #endif // FILEWATCH_PLATFORM_MAC
 
 namespace filewatch {
+        namespace fs = std::filesystem;
 	enum class Event {
 		added,
 		removed,
@@ -178,18 +179,20 @@ namespace filewatch {
 		typedef std::basic_regex<C, std::regex_traits<C>> UnderpinningRegex;
 
 	public:
-
-		FileWatch(StringType path, UnderpinningRegex pattern, std::function<void(const StringType& file, const Event event_type)> callback) :
-			_path(absolute_path_of(path)),
-			_pattern(pattern),
-			_callback(callback),
-                  _directory(get_directory(path))
+		// with filters
+		FileWatch(fs::path path, UnderpinningRegex pattern,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : _path(absolute_path_of(path)), _pattern(pattern), _callback(callback),
+		      _directory(get_directory(path))
 		{
 			init();
 		}
 
-		FileWatch(StringType path, std::function<void(const StringType& file, const Event event_type)> callback) :
-			FileWatch<StringType>(path, UnderpinningRegex(_regex_all), callback) {}
+		// without filter
+		FileWatch(fs::path path, std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatch<StringType>(path, UnderpinningRegex(_regex_all), callback)
+		{
+		}
 
 		~FileWatch() {
 			destroy();
@@ -217,14 +220,13 @@ namespace filewatch {
 		static constexpr C _regex_all[] = { '.', '*', '\0' };
 		static constexpr C _this_directory[] = { '.', '/', '\0' };
 
-		struct PathParts
-		{
-			PathParts(StringType directory, StringType filename) : directory(directory), filename(filename) {}
-			StringType directory;
-			StringType filename;
+		struct PathParts {
+			fs::path directory;
+			fs::path filename;
 		};
-		const StringType _path;
-
+		// the path to watch, either a single file or directory
+		const fs::path _path;
+		// additional filters
 		UnderpinningRegex _pattern;
 
 		static constexpr std::size_t _buffer_size = { 1024 * 256 };
@@ -389,25 +391,19 @@ namespace filewatch {
 #endif // FILEWATCH_PLATFORM_MAC
 		}
 
-		const PathParts split_directory_and_file(const StringType& path) const 
+		const PathParts split_directory_and_file(const fs::path &path) const
 		{
-			const auto predict = [](C character) {
-#ifdef _WIN32
-				return character == C('\\') || character == C('/');
-#elif __unix__ || FILEWATCH_PLATFORM_MAC
-				return character == C('/');
-#endif // __unix__
-			};
+			fs::path parent_path = path.parent_path();
+			// deal with empty parent path case such as "text.txt"
+			if (parent_path.empty()) {
+				parent_path = fs::current_path();
+			}
+			parent_path = fs::absolute(parent_path);
 
-			UnderpinningString path_string = path;
-			const auto pivot = std::find_if(path_string.rbegin(), path_string.rend(), predict).base();
-			//if the path is something like "test.txt" there will be no directory part, however we still need one, so insert './'
-			const StringType directory = [&]() {
-				const auto extracted_directory = UnderpinningString(path_string.begin(), pivot);
-				return (extracted_directory.size() > 0) ? extracted_directory : UnderpinningString(_this_directory);
-			}();
-			const StringType filename = UnderpinningString(pivot, path_string.end());
-			return PathParts(directory, filename);
+			return PathParts{
+			    parent_path,
+			    path.filename(),
+			};
 		}
 
 		bool pass_filter(const UnderpinningString& file_path)
@@ -869,26 +865,30 @@ namespace filewatch {
                   return strncmp(file.data(), path.data(), path.size()) == 0;
             }
 
-            PathParts splitPath(const StringType& path) {
-                  PathParts split = split_directory_and_file(path);
+	    PathParts splitPath(const StringType &path)
+	    {
+		    return split_directory_and_file(path);
 
-                  if (split.directory.size() > 0 && split.directory[split.directory.size() - 1] == '/') {
-                              split.directory.erase(split.directory.size() - 1);
-                  }
-                  return split;
-            }
+		    // all it's doing here is remove the "/"
+		    // if (split.directory.size() > 0 && split.directory[split.directory.size() - 1] == '/') {
+		    //             split.directory.erase(split.directory.size() - 1);
+		    // }
+		    // return split;
+	    }
 
-            StringType fullPathOf(const StringType& file) {
-                  return _path + '/' + file;
-            }
+	    fs::path fullPathOf(const fs::path &file)
+	    {
+		    return _path / file;
+	    }
 
-            int openFile(const StringType& file) {
-                  int fd = open(fullPathOf(file).c_str(), O_RDONLY);
-                  assert(fd != -1);
-                  return fd;
-            }
+	    int openFile(const fs::path &file)
+	    {
+		    int fd = open(fullPathOf(file).c_str(), O_RDONLY);
+		    assert(fd != -1);
+		    return fd;
+	    }
 
-            void walkAndSeeChanges() {
+	    void walkAndSeeChanges() {
                   struct RenamedPair {
                         StringType old;
                         StringType current;
@@ -1072,12 +1072,12 @@ namespace filewatch {
 
                   if (_watching_single_file && pathPair.filename != _filename) {
                         return;
-                  }
-                  if (pathPair.directory != _path || !std::regex_match(pathPair.filename, _pattern)) {
-                        return;
-                  }
+		  }
+		  if (pathPair.directory != _path || !std::regex_match(StringType(pathPair.filename), _pattern)) {
+			  return;
+		  }
 
-                  Event event = Event::modified;
+		  Event event = Event::modified;
                   if (_previous_event_is_rename) {
                         event = Event::renamed_new;
                         _directory_snapshot.insert(std::make_pair(pathPair.filename, 

@@ -64,28 +64,29 @@
 #define FILEWATCH_PLATFORM_MAC 1
 #endif
 
-#include <functional>
-#include <atomic>
-#include <thread>
-#include <mutex>
-#include <condition_variable>
-#include <utility>
-#include <vector>
-#include <array>
-#include <unordered_map>
-#include <unordered_set>
-#include <system_error>
-#include <string>
 #include <algorithm>
-#include <type_traits>
-#include <future>
-#include <regex>
+#include <array>
+#include <atomic>
+#include <cassert>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
-#include <cassert>
-#include <cstdlib>
+#include <filesystem>
+#include <functional>
+#include <future>
 #include <iostream>
+#include <mutex>
+#include <regex>
+#include <string>
+#include <system_error>
+#include <thread>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 #ifdef FILEWATCH_PLATFORM_MAC
 extern "C" int __getdirentries64(int, char *, int, long *);

@@ -1,25 +1,35 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.10)
 
 # Project name
-project( FileWatch VERSION 0.0.1 LANGUAGES C CXX)
+project( FileWatch VERSION 0.0.2 LANGUAGES C CXX)
 
 option(BuildTests "Build the unit tests" ON)
 enable_testing()
 
-# Enable c++11
-set(CMAKE_CXX_STANDARD 11)
+# Enable c++17 required for std::filesystem
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED on)
 
-# Add debug flags
-if(MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi /MP")
-else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wall -Wextra -Weffc++")
+if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+   exec_program(uname ARGS -v  OUTPUT_VARIABLE DARWIN_VERSION)
+   string(REGEX MATCH "[0-9]+" DARWIN_VERSION ${DARWIN_VERSION})
+   if (DARWIN_VERION LESS 17)
+     message(FATAL_ERROR "Minimum Darwin version 17 (MacOS 10.13)"
+       "required. Current version: ${DARWIN_VERSION}")
+   endif()
 endif()
 
-if(APPLE)
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -framework CoreServices")
-      set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+add_library(FileWatch INTERFACE)
+target_include_directories(FileWatch INTERFACE ${CMAKE_SOURCE_DIR})
+target_compile_definitions(FileWatch INTERFACE
+  $<$<PLATFORM_ID:Linux>:-DFILEWATCH_PLATFORM_LINUX=1>
+  $<$<PLATFORM_ID:Darwin>:-DFILEWATCH_PLATFORM_MAC=1>
+  $<$<PLATFORM_ID:Windows>:-DFILEWATCH_PLATFORM_WIN=1>
+)
+
+if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+  target_link_options(FileWatch INTERFACE -framework CoreServices)
+
 endif()
 
 # dial up the warnings

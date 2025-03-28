@@ -19,18 +19,17 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
    endif()
 endif()
 
-# Add debug flags
-if(MSVC)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zi /MP")
-else()
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ggdb3 -Wall -Wextra -Weffc++")
-endif()
-
 add_library(FileWatch INTERFACE)
 target_include_directories(FileWatch INTERFACE ${CMAKE_SOURCE_DIR})
+target_compile_definitions(FileWatch INTERFACE
+  $<$<PLATFORM_ID:Linux>:-DFILEWATCH_PLATFORM_LINUX=1>
+  $<$<PLATFORM_ID:Darwin>:-DFILEWATCH_PLATFORM_MAC=1>
+  $<$<PLATFORM_ID:Windows>:-DFILEWATCH_PLATFORM_WIN=1>
+)
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   target_link_options(FileWatch INTERFACE -framework CoreServices)
+
 endif()
 
 # dial up the warnings

@@ -38,30 +38,24 @@
 #include <shlwapi.h>
 #endif // WIN32
 
-#if __unix__
-#include <stdio.h>
-#include <stdlib.h>
+#if defined(FILEWATCH_PLATFORM_LINUX)
+#include <dirent.h>
 #include <errno.h>
-#include <sys/types.h>
+#include <fcntl.h>
+#include <linux/limits.h>
+#include <stdlib.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
-#include <fcntl.h>
-#include <dirent.h>
+#include <sys/types.h>
 #include <unistd.h>
-#endif // __unix__
-
-#ifdef __linux__
-#include <linux/limits.h>
 #endif
 
-#if defined(__APPLE__) || defined(__MACH__)
+#if defined(FILEWATCH_PLATFORM_MAC)
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreServices/CoreServices.h>
+#include <fcntl.h>
 #include <sys/param.h>
 #include <sys/stat.h>
-#include <fcntl.h>
-#include <dirent.h>
-#define FILEWATCH_PLATFORM_MAC 1
 #endif
 
 #include <algorithm>
@@ -181,8 +175,8 @@ namespace filewatch {
 
 	      // Const memeber varibles don't let me implent moves nicely, if moves are really wanted std::unique_ptr
 	      // should be used and move that.
-	      FileWatchBase<StringType>(FileWatchBase<StringType, SubClass> &&) = delete;
-	      FileWatchBase<StringType, SubClass> &operator=(FileWatchBase<StringType, SubClass> &&) & = delete;
+	      FileWatchBase(FileWatchBase &&) = delete;
+	      FileWatchBase &operator=(FileWatchBase &&) & = delete;
 
       protected:
 	      FileWatchBase(const fs::path &path, const std::regex &pattern,
@@ -204,12 +198,9 @@ namespace filewatch {
 		      fs::path filename;
 	      };
 	      // the path to watch, either a single file or directory
-	      const fs::path _path;
+	      fs::path _path;
 	      // additional filters
 	      std::regex _pattern;
-
-	      static constexpr std::size_t _buffer_size = {1024 * 256};
-
 	      // only used if watch a single file
 	      fs::path _filename;
 
@@ -248,19 +239,6 @@ namespace filewatch {
 			{ FILE_ACTION_RENAMED_NEW_NAME, Event::renamed_new }
 		};
 #endif // WIN32
-
-#if __unix__
-		struct FolderInfo {
-			int folder;
-			int watch;
-		};
-
-		FolderInfo  _directory;
-
-		const std::uint32_t _listen_filters = IN_MODIFY | IN_CREATE | IN_DELETE;
-
-		const static std::size_t event_size = (sizeof(struct inotify_event));
-#endif // __unix__
 
 #if FILEWATCH_PLATFORM_MAC
 
@@ -311,10 +289,9 @@ namespace filewatch {
 			_destory = true;
 			_running = std::promise<void>();
 
+			static_cast<SubClass *>(this)->close();
 #ifdef _WIN32
 			SetEvent(_close_event);
-#elif __unix__
-			inotify_rm_watch(_directory.folder, _directory.watch);
 #endif // __unix__
 
 			_cv.notify_all();
@@ -323,10 +300,8 @@ namespace filewatch {
 
 #ifdef _WIN32
 			CloseHandle(_directory);
-#elif __unix__
-			close(_directory.folder);
-
 #endif
+
 			static_cast<SubClass *>(this)->destroy();
 		}
 
@@ -502,100 +477,6 @@ namespace filewatch {
 			}
 		}
 #endif // WIN32
-
-#if __unix__
-
-		bool is_file(const StringType& path) const
-		{
-			struct stat statbuf = {};
-			if (stat(path.c_str(), &statbuf) != 0)
-			{
-				throw std::system_error(errno, std::system_category());
-			}
-			return S_ISREG(statbuf.st_mode);
-		}
-
-		void get_directory(const StringType& path)
-		{
-			const auto folder = inotify_init();
-			if (folder < 0) 
-			{
-				throw std::system_error(errno, std::system_category());
-			}
-
-			_watching_single_file = is_file(path);
-
-			const StringType watch_path = [this, &path]() {
-				if (_watching_single_file)
-				{
-					const auto parsed_path = split_directory_and_file(path);
-					_filename = parsed_path.filename;
-					return parsed_path.directory;
-				}
-				else
-				{
-					return path;
-				}
-			}();
-
-			const auto watch = inotify_add_watch(folder, watch_path.c_str(), IN_MODIFY | IN_CREATE | IN_DELETE);
-			if (watch < 0) 
-			{
-				throw std::system_error(errno, std::system_category());
-			}
-			_directory = { folder, watch };
-		}
-
-		void monitor_directory() 
-		{
-			std::vector<char> buffer(_buffer_size);
-
-			_running.set_value();
-			while (_destory == false) 
-			{
-				const auto length = read(_directory.folder, static_cast<void*>(buffer.data()), buffer.size());
-				if (length > 0) 
-				{
-					int i = 0;
-					std::vector<std::pair<StringType, Event>> parsed_information;
-					while (i < length) 
-					{
-						struct inotify_event *event = reinterpret_cast<struct inotify_event *>(&buffer[i]); // NOLINT
-						if (event->len) 
-						{
-							const UnderpinningString changed_file{ event->name };
-							if (pass_filter(changed_file))
-							{
-								if (event->mask & IN_CREATE) 
-								{
-									parsed_information.emplace_back(StringType{ changed_file }, Event::added);
-								}
-								else if (event->mask & IN_DELETE) 
-								{
-									parsed_information.emplace_back(StringType{ changed_file }, Event::removed);
-								}
-								else if (event->mask & IN_MODIFY) 
-								{
-									parsed_information.emplace_back(StringType{ changed_file }, Event::modified);
-								}
-							}
-						}
-						i += event_size + event->len;
-					}
-					//dispatch callbacks
-					{
-						std::lock_guard<std::mutex> lock(_callback_mutex);
-						_callback_information.insert(_callback_information.end(), parsed_information.begin(), parsed_information.end());
-					}
-					_cv.notify_all();
-				}
-			}
-		}
-#endif // __unix__
-
-#if FILEWATCH_PLATFORM_MAC
-
-#endif // FILEWATCH_PLATFORM_MAC
 
 		void callback_thread()
 		{
@@ -898,11 +779,116 @@ namespace filewatch {
 
 } // namespace filewatch
 
-#elif defined(__unix__)
+#elif defined(FILEWATCH_PLATFORM_LINUX)
 
 namespace filewatch {
 	class FileWatch : public FileWatchBase<std::string, FileWatch> {
 		friend FileWatchBase<std::string, FileWatch>;
+
+	public:
+		FileWatch(fs::path const &path, std::regex const &pattern,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatchBase<std::string, FileWatch>(path, pattern, callback)
+		{
+			// it has to go here because base class cannot
+			// initialize subclass
+			this->init();
+		}
+
+		FileWatch(fs::path const &path,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatch(path, std::regex(this->_regex_all), callback)
+		{
+		}
+
+		FileWatch(const FileWatch &other) : FileWatch(other._path, other._callback)
+		{
+		}
+
+	private:
+		struct FolderInfo {
+			int folder;
+			int watch;
+		};
+
+		FolderInfo _directory;
+
+		const std::uint32_t _listen_filters = IN_MODIFY | IN_CREATE | IN_DELETE;
+
+		constexpr static size_t event_size = (sizeof(struct inotify_event));
+		constexpr static size_t buf_size = 1024 * event_size + 16;
+
+	private:
+		void get_directory(const fs::path &path)
+		{
+			const auto folder = inotify_init();
+			if (folder < 0) 
+			{
+				throw std::system_error(errno, std::system_category());
+			}
+
+			_watching_single_file = fs::is_regular_file(path);
+			_filename = path.filename();
+
+			const auto watch = inotify_add_watch(folder, path.c_str(), IN_MODIFY | IN_CREATE | IN_DELETE);
+			if (watch < 0) {
+				throw std::system_error(errno, std::system_category());
+			}
+			_directory = { folder, watch };
+		}
+		void close()
+		{
+			inotify_rm_watch(_directory.folder, _directory.watch);
+		}
+		void destroy()
+		{
+			::close(_directory.folder);
+		}
+
+		void process_inotify(inotify_event const *event,
+		                     std::vector<std::pair<fs::path, Event>> &parsed_information)
+		{
+			// when watching a single file, the event->len could be 0
+			if (event->len || _watching_single_file) {
+				const fs::path changed_file{event->name};
+				if (pass_filter(changed_file)) {
+					if (event->mask & IN_CREATE) {
+						parsed_information.emplace_back(changed_file, Event::added);
+					}
+					else if (event->mask & IN_DELETE) {
+						parsed_information.emplace_back(changed_file, Event::removed);
+					}
+					else if (event->mask & IN_MODIFY) {
+						parsed_information.emplace_back(changed_file, Event::modified);
+					}
+				}
+			}
+		}
+
+		void monitor_directory()
+		{
+			char buffer[buf_size];
+			const struct inotify_event *event = nullptr;
+			_running.set_value();
+			while (_destory == false) {
+				const auto length = read(_directory.folder, static_cast<void *>(buffer), buf_size);
+				if (length > 0) {
+					std::vector<std::pair<fs::path, Event>> parsed_information;
+					for (char *ptr = buffer; ptr < buffer + length;
+					     ptr += sizeof(struct inotify_event) + event->len)
+					{
+						event = reinterpret_cast<struct inotify_event *>(ptr); // NOLINT
+						process_inotify(event, parsed_information);
+					}
+					// dispatch callbacks
+					{
+						std::lock_guard<std::mutex> lock(_callback_mutex);
+						_callback_information.insert(_callback_information.end(), parsed_information.begin(), parsed_information.end());
+					}
+					_cv.notify_all();
+				}
+			}
+		}
 	};
 } // namespace filewatch
 

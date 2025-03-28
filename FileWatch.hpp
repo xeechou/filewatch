@@ -76,7 +76,6 @@
 #include <filesystem>
 #include <functional>
 #include <future>
-#include <iostream>
 #include <mutex>
 #include <regex>
 #include <string>
@@ -88,12 +87,8 @@
 #include <utility>
 #include <vector>
 
-#ifdef FILEWATCH_PLATFORM_MAC
-extern "C" int __getdirentries64(int, char *, int, long *);
-#endif // FILEWATCH_PLATFORM_MAC
-
 namespace filewatch {
-        namespace fs = std::filesystem;
+	namespace fs = std::filesystem;
 	enum class Event {
 		added,
 		removed,
@@ -152,48 +147,26 @@ namespace filewatch {
       }
 
       /**
-       * \class FileWatch
+       * \class FileWatchBase
        *
        * \brief Watches a folder or file, and will notify of changes via function callback.
        *
        * \author Thomas Monkman
        *
        */
-template <class StringType, class SubClass>
+      template <class StringType, class SubClass>
       class FileWatchBase {
 	      typedef typename StringType::value_type C;
 	      typedef std::basic_string<C, std::char_traits<C>> UnderpinningString;
 	      typedef std::basic_regex<C, std::regex_traits<C>> UnderpinningRegex;
 
       public:
-	      // with filters
-	      FileWatchBase(fs::path path, UnderpinningRegex pattern,
-		        std::function<void(const fs::path &file, const Event event_type)> callback)
-		  : _path(fs::canonical(path)), _pattern(pattern), _callback(callback)
-	      {
-		      if (!fs::exists(path)) {
-			      throw fs::filesystem_error("no such file exists", path, std::error_code());
-		      }
-		      get_directory(_path);
-		      init();
-	      }
-
-	      // without filter
-	      FileWatchBase(fs::path path, std::function<void(const fs::path &file, const Event event_type)> callback)
-		      : FileWatchBase<StringType, SubClass>(path, UnderpinningRegex(_regex_all), callback)
-	      {
-	      }
-
 	      ~FileWatchBase()
 	      {
 		      destroy();
 	      }
 
-	FileWatchBase(const FileWatchBase<StringType, SubClass> &other) : FileWatchBase<StringType, SubClass>(other._path, other._callback)
-	      {
-	      }
-
-	FileWatchBase<StringType, SubClass> &operator=(const FileWatchBase<StringType, SubClass> &other)
+	      FileWatchBase<StringType, SubClass> &operator=(const FileWatchBase<StringType, SubClass> &other)
 	      {
 		      if (this == &other) {
 			      return *this;
@@ -202,15 +175,26 @@ template <class StringType, class SubClass>
 		      destroy();
 		      _path = other._path;
 		      _callback = other._callback;
-		      get_directory(other._path);
 		      init();
 		      return *this;
 	      }
 
 	      // Const memeber varibles don't let me implent moves nicely, if moves are really wanted std::unique_ptr
 	      // should be used and move that.
-	FileWatchBase<StringType>(FileWatchBase<StringType, SubClass> &&) = delete;
-	FileWatchBase<StringType, SubClass> &operator=(FileWatchBase<StringType, SubClass> &&) & = delete;
+	      FileWatchBase<StringType>(FileWatchBase<StringType, SubClass> &&) = delete;
+	      FileWatchBase<StringType, SubClass> &operator=(FileWatchBase<StringType, SubClass> &&) & = delete;
+
+      protected:
+	      FileWatchBase(const fs::path &path, const std::regex &pattern,
+		            std::function<void(const fs::path &file, const Event event_type)> callback)
+		  : _path(fs::canonical(path)), _pattern(pattern), _callback(callback)
+	      {
+		      if (!fs::exists(path)) {
+			      throw fs::filesystem_error("no such file exists", path, std::error_code());
+		      }
+		      // init();
+	      }
+
       protected:
 	      static constexpr C _regex_all[] = {'.', '*', '\0'};
 	      static constexpr C _this_directory[] = {'.', '/', '\0'};
@@ -222,12 +206,12 @@ template <class StringType, class SubClass>
 	      // the path to watch, either a single file or directory
 	      const fs::path _path;
 	      // additional filters
-	      UnderpinningRegex _pattern;
+	      std::regex _pattern;
 
 	      static constexpr std::size_t _buffer_size = {1024 * 256};
 
 	      // only used if watch a single file
-	      StringType _filename;
+	      fs::path _filename;
 
 	      std::function<void(const StringType &file, const Event event_type)> _callback;
 
@@ -279,57 +263,12 @@ template <class StringType, class SubClass>
 #endif // __unix__
 
 #if FILEWATCH_PLATFORM_MAC
-		struct FileState {
-			ino_t inode;
-			uint32_t nlink;
-			time_t last_modification;
-		};
-		struct DirectorySnapShot {
-			using states_t = std::unordered_map<fs::path, FileState>;
-			using paths_t = std::unordered_map<ino_t, fs::path>;
 
-			states_t states;
-			paths_t paths;
-
-			typename states_t::const_iterator find(fs::path const &path) const
-			{
-				return states.find(path);
-			}
-
-			typename paths_t::const_iterator find(ino_t node) const
-			{
-				return paths.find(node);
-			}
-
-			void insert(fs::path const &path, FileState const &state)
-			{
-				if (paths.find(state.inode) != paths.end())
-					paths.erase(paths.find(state.inode));
-				states[path] = state;
-				paths[state.inode] = path;
-			}
-
-			void erase(fs::path const &path)
-			{
-				if (states.find(path) != states.end()) {
-					FileState &state = states.at(path);
-					paths.erase(state.inode);
-				}
-				states.erase(path);
-			}
-
-		} _directory_snapshot;
-
-		bool _previous_event_is_rename = false;
-		dispatch_queue_t _queue = nullptr;
-		// int _file_fd = -1;
-		struct timespec _last_modification_time = {};
-		FSEventStreamRef _directory;
-		// fd for single file
 #endif // FILEWATCH_PLATFORM_MAC
 
-		void init() 
+		void init()
 		{
+			static_cast<SubClass *>(this)->get_directory(_path);
 #ifdef _WIN32
 			_close_event = CreateEvent(NULL, TRUE, FALSE, NULL);
 			if (!_close_event) {
@@ -348,16 +287,20 @@ template <class StringType, class SubClass>
 				}
 			});
 
-			_watch_thread = std::thread([this]() { 
-				try {
-					monitor_directory();
-				} catch (...) {
-					try {
-						_running.set_exception(std::current_exception());
-					}
-					catch (...) {} // set_exception() may throw too
-				}
-			});
+			_watch_thread = std::thread(
+			    [this]()
+			    {
+				    try {
+					    static_cast<SubClass *>(this)->monitor_directory();
+				    }
+				    catch (...) {
+					    try {
+						    _running.set_exception(std::current_exception());
+					    }
+					    catch (...) {
+					    } // set_exception() may throw too
+				    }
+			    });
 
 			std::future<void> future = _running.get_future();
 			future.get(); //block until the monitor_directory is up and running
@@ -382,15 +325,9 @@ template <class StringType, class SubClass>
 			CloseHandle(_directory);
 #elif __unix__
 			close(_directory.folder);
-#elif FILEWATCH_PLATFORM_MAC
-                  FSEventStreamStop(_directory);
-                  FSEventStreamInvalidate(_directory);
-                  FSEventStreamRelease(_directory);
-                  _directory = nullptr;
-                  if (_queue) {
-                  	dispatch_release(_queue);
-                  }
-#endif // FILEWATCH_PLATFORM_MAC
+
+#endif
+			static_cast<SubClass *>(this)->destroy();
 		}
 
 		const PathParts split_directory_and_file(const fs::path &path) const
@@ -657,6 +594,115 @@ template <class StringType, class SubClass>
 #endif // __unix__
 
 #if FILEWATCH_PLATFORM_MAC
+
+#endif // FILEWATCH_PLATFORM_MAC
+
+		void callback_thread()
+		{
+			while (_destory == false) {
+				std::unique_lock<std::mutex> lock(_callback_mutex);
+				if (_callback_information.empty() && _destory == false) {
+					_cv.wait(lock, [this] { return _callback_information.size() > 0 || _destory; });
+				}
+				decltype(_callback_information) callback_information = {};
+				std::swap(callback_information, _callback_information);
+				lock.unlock();
+
+				for (const auto &file : callback_information) {
+					if (_callback) {
+						try {
+							_callback(file.first, file.second);
+						}
+						catch (const std::exception &) {
+						}
+					}
+				}
+			}
+		}
+      };
+
+      template <class StringType, class SubClass>
+      constexpr typename FileWatchBase<StringType, SubClass>::C FileWatchBase<StringType, SubClass>::_regex_all[];
+      template <class StringType, class SubClass>
+      constexpr typename FileWatchBase<StringType, SubClass>::C FileWatchBase<StringType, SubClass>::_this_directory[];
+} // namespace filewatch
+
+#if defined(FILEWATCH_PLATFORM_MAC)
+
+namespace filewatch {
+	// TODO the string template
+	class FileWatch : public FileWatchBase<std::string, FileWatch> {
+		friend FileWatchBase<std::string, FileWatch>;
+
+	public:
+		FileWatch(fs::path const &path, std::regex const &pattern,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatchBase<std::string, FileWatch>(path, pattern, callback)
+		{
+			// it has to go here because base class cannot
+			// initialize subclass
+			this->init();
+		}
+
+		FileWatch(fs::path const &path,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatch(path, std::regex(this->_regex_all), callback)
+		{
+		}
+
+		FileWatch(const FileWatch &other) : FileWatch(other._path, other._callback)
+		{
+		}
+
+	private:
+		struct FileState {
+			ino_t inode;
+			uint32_t nlink;
+			time_t last_modification;
+		};
+		struct DirectorySnapShot {
+			using states_t = std::unordered_map<fs::path, FileState>;
+			using paths_t = std::unordered_map<ino_t, fs::path>;
+
+			states_t states;
+			paths_t paths;
+
+			typename states_t::const_iterator find(fs::path const &path) const
+			{
+				return states.find(path);
+			}
+
+			typename paths_t::const_iterator find(ino_t node) const
+			{
+				return paths.find(node);
+			}
+
+			void insert(fs::path const &path, FileState const &state)
+			{
+				if (paths.find(state.inode) != paths.end())
+					paths.erase(paths.find(state.inode));
+				states[path] = state;
+				paths[state.inode] = path;
+			}
+
+			void erase(fs::path const &path)
+			{
+				if (states.find(path) != states.end()) {
+					FileState &state = states.at(path);
+					paths.erase(state.inode);
+				}
+				states.erase(path);
+			}
+
+		} _directory_snapshot;
+
+		bool _previous_event_is_rename = false;
+		dispatch_queue_t _queue = nullptr;
+		struct timespec _last_modification_time = {};
+		FSEventStreamRef _directory;
+		// fd for single file
+
+	private:
 		FileState makeFileState(fs::path const &path)
 		{
 			struct stat st{};
@@ -673,8 +719,8 @@ template <class StringType, class SubClass>
 		void notify(const fs::path &path, const FSEventStreamEventFlags flags, ino_t inode)
 		{
 			std::vector<std::pair<fs::path, Event>> callbacks;
-			bool regex_matched = std::regex_match(path.filename().u8string(), _pattern);
-			fs::path parentPath = fs::is_directory(_path) ? _path : _path.parent_path();
+			bool regex_matched = std::regex_match(path.filename().u8string(), this->_pattern);
+			fs::path parentPath = fs::is_directory(this->_path) ? this->_path : this->_path.parent_path();
 			fs::path relPath = fs::relative(path, parentPath);
 			if (relPath.empty()) {
 				return;
@@ -696,7 +742,7 @@ template <class StringType, class SubClass>
 			}
 			else if ((flags & kFSEventStreamEventFlagItemCreated) &&
 			         regex_matched &&
-			         !_watching_single_file)
+			         !this->_watching_single_file)
 			{
 				_directory_snapshot.insert(path, makeFileState(path));
 				callbacks.emplace_back(std::make_pair(relPath, Event::added));
@@ -708,11 +754,11 @@ template <class StringType, class SubClass>
 				}
 			}
 			{
-				std::lock_guard<std::mutex> lock(_callback_mutex);
-				_callback_information.insert(
-				    std::end(_callback_information), callbacks.begin(), callbacks.end());
+				std::lock_guard<std::mutex> lock(this->_callback_mutex);
+				this->_callback_information.insert(
+				    std::end(this->_callback_information), callbacks.begin(), callbacks.end());
 			}
-			_cv.notify_all();
+			this->_cv.notify_all();
 		}
 
 		static CFStringRef CFStringRefFromPath(const fs::path &path)
@@ -738,8 +784,7 @@ template <class StringType, class SubClass>
 		                          const FSEventStreamEventFlags *eventFlags,
 		                          __attribute__((unused)) const FSEventStreamEventId *eventIds)
 		{
-			FileWatchBase<StringType, SubClass> *self =
-			    (FileWatchBase<StringType, SubClass> *)clientCallBackInfo;
+			auto *self = (FileWatch *)clientCallBackInfo;
 
 			for (size_t i = 0; i < numEvents; i++) {
 				FSEventStreamEventFlags flag = eventFlags[i];
@@ -791,10 +836,10 @@ template <class StringType, class SubClass>
 		{
 			FSEventStreamRef stream = openStream(directory);
 			// note that we could come from openStreamForFile.
-			if (fs::is_directory(directory) && !_watching_single_file) {
+			if (fs::is_directory(directory) && !this->_watching_single_file) {
 				for (const auto &dir_entry : fs::directory_iterator{directory}) {
 					const auto &path = dir_entry.path();
-					if (std::regex_match(path.u8string(), _pattern)) {
+					if (std::regex_match(path.u8string(), this->_pattern)) {
 						_directory_snapshot.insert(path, makeFileState(path));
 					}
 				}
@@ -804,10 +849,10 @@ template <class StringType, class SubClass>
 
 		FSEventStreamRef openStreamForFile(const fs::path &file)
 		{
-			PathParts split = split_directory_and_file(file);
+			auto split = this->split_directory_and_file(file);
 
-			_watching_single_file = true;
-			_filename = std::move(split.filename);
+			this->_watching_single_file = true;
+			this->_filename = std::move(split.filename);
 			_directory_snapshot.insert(file, makeFileState(file));
 			return openStreamForDirectory(split.directory);
 		}
@@ -836,37 +881,31 @@ template <class StringType, class SubClass>
 			_queue = dispatch_queue_create("DirectoryWatcher", DISPATCH_QUEUE_SERIAL);
 			FSEventStreamSetDispatchQueue(_directory, _queue);
 			FSEventStreamStart(_directory);
-			_running.set_value();
+			this->_running.set_value();
 		}
-#endif // FILEWATCH_PLATFORM_MAC
 
-		void callback_thread()
+		void destroy()
 		{
-			while (_destory == false) {
-				std::unique_lock<std::mutex> lock(_callback_mutex);
-				if (_callback_information.empty() && _destory == false) {
-					_cv.wait(lock, [this] { return _callback_information.size() > 0 || _destory; });
-				}
-				decltype(_callback_information) callback_information = {};
-				std::swap(callback_information, _callback_information);
-				lock.unlock();
-
-				for (const auto& file : callback_information) {
-					if (_callback) {
-						try
-						{
-							_callback(file.first, file.second);
-						}
-						catch (const std::exception&)
-						{
-						}
-					}
-				}
+			FSEventStreamStop(_directory);
+			FSEventStreamInvalidate(_directory);
+			FSEventStreamRelease(_directory);
+			_directory = nullptr;
+			if (_queue) {
+				dispatch_release(_queue);
 			}
 		}
 	};
 
-template<class StringType, class SubClass> constexpr typename FileWatchBase<StringType, SubClass>::C FileWatchBase<StringType, SubClass>::_regex_all[];
-template<class StringType, class SubClass> constexpr typename FileWatchBase<StringType, SubClass>::C FileWatchBase<StringType, SubClass>::_this_directory[];
-}
+} // namespace filewatch
+
+#elif defined(__unix__)
+
+namespace filewatch {
+	class FileWatch : public FileWatchBase<std::string, FileWatch> {
+		friend FileWatchBase<std::string, FileWatch>;
+	};
+} // namespace filewatch
+
+#endif
+
 #endif

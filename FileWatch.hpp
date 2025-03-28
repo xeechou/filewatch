@@ -151,18 +151,6 @@ namespace filewatch {
             assert(false);
       }
 
-      // template<typename StringType>
-      // static typename std::enable_if<std::is_same<typename StringType::value_type, wchar_t>::value, bool>::type
-      // isParentOrSelfDirectory(const StringType& path) {
-      //       return path == L"." || path == L"..";
-      // }
-
-      // template<typename StringType>
-      // static typename std::enable_if<std::is_same<typename StringType::value_type, char>::value, bool>::type
-      // isParentOrSelfDirectory(const StringType& path) {
-      //       return path == "." || path == "..";
-      // }
-
       /**
        * \class FileWatch
        *
@@ -172,40 +160,40 @@ namespace filewatch {
        *
        */
       template <class StringType>
-      class FileWatch {
+      class FileWatchBase {
 	      typedef typename StringType::value_type C;
 	      typedef std::basic_string<C, std::char_traits<C>> UnderpinningString;
 	      typedef std::basic_regex<C, std::regex_traits<C>> UnderpinningRegex;
 
       public:
 	      // with filters
-	      FileWatch(fs::path path, UnderpinningRegex pattern,
+	      FileWatchBase(fs::path path, UnderpinningRegex pattern,
 		        std::function<void(const fs::path &file, const Event event_type)> callback)
-		  : _path(fs::canonical(path)), _pattern(pattern), _callback(callback),
-		    _directory(get_directory(fs::canonical(path)))
+		  : _path(fs::canonical(path)), _pattern(pattern), _callback(callback)
 	      {
 		      if (!fs::exists(path)) {
 			      throw fs::filesystem_error("no such file exists", path, std::error_code());
 		      }
+		      get_directory(_path);
 		      init();
 	      }
 
 	      // without filter
-	      FileWatch(fs::path path, std::function<void(const fs::path &file, const Event event_type)> callback)
-		  : FileWatch<StringType>(path, UnderpinningRegex(_regex_all), callback)
+	      FileWatchBase(fs::path path, std::function<void(const fs::path &file, const Event event_type)> callback)
+		  : FileWatchBase<StringType>(path, UnderpinningRegex(_regex_all), callback)
 	      {
 	      }
 
-	      ~FileWatch()
+	      ~FileWatchBase()
 	      {
 		      destroy();
 	      }
 
-	      FileWatch(const FileWatch<StringType> &other) : FileWatch<StringType>(other._path, other._callback)
+	      FileWatchBase(const FileWatchBase<StringType> &other) : FileWatchBase<StringType>(other._path, other._callback)
 	      {
 	      }
 
-	      FileWatch<StringType> &operator=(const FileWatch<StringType> &other)
+	      FileWatchBase<StringType> &operator=(const FileWatchBase<StringType> &other)
 	      {
 		      if (this == &other) {
 			      return *this;
@@ -214,17 +202,16 @@ namespace filewatch {
 		      destroy();
 		      _path = other._path;
 		      _callback = other._callback;
-		      _directory = get_directory(other._path);
+		      get_directory(other._path);
 		      init();
 		      return *this;
 	      }
 
 	      // Const memeber varibles don't let me implent moves nicely, if moves are really wanted std::unique_ptr
 	      // should be used and move that.
-	      FileWatch<StringType>(FileWatch<StringType> &&) = delete;
-	      FileWatch<StringType> &operator=(FileWatch<StringType> &&) & = delete;
-
-      private:
+	      FileWatchBase<StringType>(FileWatchBase<StringType> &&) = delete;
+	      FileWatchBase<StringType> &operator=(FileWatchBase<StringType> &&) & = delete;
+      protected:
 	      static constexpr C _regex_all[] = {'.', '*', '\0'};
 	      static constexpr C _this_directory[] = {'.', '/', '\0'};
 
@@ -446,7 +433,7 @@ namespace filewatch {
 			return CreateFileW(lpFileName, args...);
 		}
 
-		HANDLE get_directory(const StringType& path) 
+		void get_directory(const StringType& path)
 		{
 			auto file_info = GetFileAttributesX(path.c_str());
 
@@ -482,7 +469,7 @@ namespace filewatch {
 			{
 				throw std::system_error(GetLastError(), std::system_category());
 			}
-			return directory;
+			_directory = directory;
 		}
 
 		void convert_wstring(const std::wstring& wstr, std::string& out)
@@ -591,7 +578,7 @@ namespace filewatch {
 			return S_ISREG(statbuf.st_mode);
 		}
 
-		FolderInfo get_directory(const StringType& path) 
+		void get_directory(const StringType& path)
 		{
 			const auto folder = inotify_init();
 			if (folder < 0) 
@@ -619,7 +606,7 @@ namespace filewatch {
 			{
 				throw std::system_error(errno, std::system_category());
 			}
-			return { folder, watch };
+			_directory = { folder, watch };
 		}
 
 		void monitor_directory() 
@@ -751,7 +738,7 @@ namespace filewatch {
 		                          const FSEventStreamEventFlags *eventFlags,
 		                          __attribute__((unused)) const FSEventStreamEventId *eventIds)
 		{
-			FileWatch<StringType> *self = (FileWatch<StringType> *)clientCallBackInfo;
+			FileWatchBase<StringType> *self = (FileWatchBase<StringType> *)clientCallBackInfo;
 
 			for (size_t i = 0; i < numEvents; i++) {
 				FSEventStreamEventFlags flag = eventFlags[i];
@@ -824,14 +811,14 @@ namespace filewatch {
 			return openStreamForDirectory(split.directory);
 		}
 
-		FSEventStreamRef get_directory(const fs::path &path)
+		void get_directory(const fs::path &path)
 		{
 			if (fs::exists(path)) {
 				if (fs::is_directory(path)) {
-					return openStreamForDirectory(path);
+					_directory = openStreamForDirectory(path);
 				}
 				else if (fs::is_regular_file(path)) {
-					return openStreamForFile(path);
+					_directory = openStreamForFile(path);
 				}
 				else {
 					throw fs::filesystem_error(
@@ -878,7 +865,7 @@ namespace filewatch {
 		}
 	};
 
-	template<class StringType> constexpr typename FileWatch<StringType>::C FileWatch<StringType>::_regex_all[];
-	template<class StringType> constexpr typename FileWatch<StringType>::C FileWatch<StringType>::_this_directory[];
+	template<class StringType> constexpr typename FileWatchBase<StringType>::C FileWatchBase<StringType>::_regex_all[];
+	template<class StringType> constexpr typename FileWatchBase<StringType>::C FileWatchBase<StringType>::_this_directory[];
 }
 #endif

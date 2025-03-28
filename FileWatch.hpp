@@ -151,101 +151,109 @@ namespace filewatch {
             assert(false);
       }
 
-      template<typename StringType>
-      static typename std::enable_if<std::is_same<typename StringType::value_type, wchar_t>::value, bool>::type 
-      isParentOrSelfDirectory(const StringType& path) {
-            return path == L"." || path == L"..";
-      }
+      // template<typename StringType>
+      // static typename std::enable_if<std::is_same<typename StringType::value_type, wchar_t>::value, bool>::type
+      // isParentOrSelfDirectory(const StringType& path) {
+      //       return path == L"." || path == L"..";
+      // }
 
-      template<typename StringType>
-      static typename std::enable_if<std::is_same<typename StringType::value_type, char>::value, bool>::type 
-      isParentOrSelfDirectory(const StringType& path) {
-            return path == "." || path == "..";
-      }
+      // template<typename StringType>
+      // static typename std::enable_if<std::is_same<typename StringType::value_type, char>::value, bool>::type
+      // isParentOrSelfDirectory(const StringType& path) {
+      //       return path == "." || path == "..";
+      // }
 
-	/**
-	* \class FileWatch
-	*
-	* \brief Watches a folder or file, and will notify of changes via function callback.
-	*
-	* \author Thomas Monkman
-	*
-	*/
-	template<class StringType>
-	class FileWatch
-	{
-		typedef typename StringType::value_type C;
-		typedef std::basic_string<C, std::char_traits<C>> UnderpinningString;
-		typedef std::basic_regex<C, std::regex_traits<C>> UnderpinningRegex;
+      /**
+       * \class FileWatch
+       *
+       * \brief Watches a folder or file, and will notify of changes via function callback.
+       *
+       * \author Thomas Monkman
+       *
+       */
+      template <class StringType>
+      class FileWatch {
+	      typedef typename StringType::value_type C;
+	      typedef std::basic_string<C, std::char_traits<C>> UnderpinningString;
+	      typedef std::basic_regex<C, std::regex_traits<C>> UnderpinningRegex;
 
-	public:
-		// with filters
-		FileWatch(fs::path path, UnderpinningRegex pattern,
-		          std::function<void(const fs::path &file, const Event event_type)> callback)
-		    : _path(absolute_path_of(path)), _pattern(pattern), _callback(callback),
-		      _directory(get_directory(path))
-		{
-			init();
-		}
+      public:
+	      // with filters
+	      FileWatch(fs::path path, UnderpinningRegex pattern,
+		        std::function<void(const fs::path &file, const Event event_type)> callback)
+		  : _path(fs::canonical(path)), _pattern(pattern), _callback(callback),
+		    _directory(get_directory(fs::canonical(path)))
+	      {
+		      if (!fs::exists(path)) {
+			      throw fs::filesystem_error("no such file exists", path, std::error_code());
+		      }
+		      init();
+	      }
 
-		// without filter
-		FileWatch(fs::path path, std::function<void(const fs::path &file, const Event event_type)> callback)
-		    : FileWatch<StringType>(path, UnderpinningRegex(_regex_all), callback)
-		{
-		}
+	      // without filter
+	      FileWatch(fs::path path, std::function<void(const fs::path &file, const Event event_type)> callback)
+		  : FileWatch<StringType>(path, UnderpinningRegex(_regex_all), callback)
+	      {
+	      }
 
-		~FileWatch() {
-			destroy();
-		}
+	      ~FileWatch()
+	      {
+		      destroy();
+	      }
 
-		FileWatch(const FileWatch<StringType>& other) : FileWatch<StringType>(other._path, other._callback) {}
+	      FileWatch(const FileWatch<StringType> &other) : FileWatch<StringType>(other._path, other._callback)
+	      {
+	      }
 
-		FileWatch<StringType>& operator=(const FileWatch<StringType>& other) 
-		{
-			if (this == &other) { return *this; }
+	      FileWatch<StringType> &operator=(const FileWatch<StringType> &other)
+	      {
+		      if (this == &other) {
+			      return *this;
+		      }
 
-			destroy();
-			_path = other._path;
-			_callback = other._callback;
-			_directory = get_directory(other._path);
-			init();
-			return *this;
-		}
+		      destroy();
+		      _path = other._path;
+		      _callback = other._callback;
+		      _directory = get_directory(other._path);
+		      init();
+		      return *this;
+	      }
 
-		// Const memeber varibles don't let me implent moves nicely, if moves are really wanted std::unique_ptr should be used and move that.
-		FileWatch<StringType>(FileWatch<StringType>&&) = delete;
-		FileWatch<StringType>& operator=(FileWatch<StringType>&&) & = delete;
+	      // Const memeber varibles don't let me implent moves nicely, if moves are really wanted std::unique_ptr
+	      // should be used and move that.
+	      FileWatch<StringType>(FileWatch<StringType> &&) = delete;
+	      FileWatch<StringType> &operator=(FileWatch<StringType> &&) & = delete;
 
-	private:
-		static constexpr C _regex_all[] = { '.', '*', '\0' };
-		static constexpr C _this_directory[] = { '.', '/', '\0' };
+      private:
+	      static constexpr C _regex_all[] = {'.', '*', '\0'};
+	      static constexpr C _this_directory[] = {'.', '/', '\0'};
 
-		struct PathParts {
-			fs::path directory;
-			fs::path filename;
-		};
-		// the path to watch, either a single file or directory
-		const fs::path _path;
-		// additional filters
-		UnderpinningRegex _pattern;
+	      struct PathParts {
+		      fs::path directory;
+		      fs::path filename;
+	      };
+	      // the path to watch, either a single file or directory
+	      const fs::path _path;
+	      // additional filters
+	      UnderpinningRegex _pattern;
 
-		static constexpr std::size_t _buffer_size = { 1024 * 256 };
+	      static constexpr std::size_t _buffer_size = {1024 * 256};
 
-		// only used if watch a single file
-		StringType _filename;
+	      // only used if watch a single file
+	      StringType _filename;
 
-		std::function<void(const StringType& file, const Event event_type)> _callback;
+	      std::function<void(const StringType &file, const Event event_type)> _callback;
 
-		std::thread _watch_thread;
+	      std::thread _watch_thread;
 
-		std::condition_variable _cv;
-		std::mutex _callback_mutex;
-		std::vector<std::pair<StringType, Event>> _callback_information;
-		std::thread _callback_thread;
+	      std::condition_variable _cv;
+	      std::mutex _callback_mutex;
+	      std::vector<std::pair<fs::path, Event>> _callback_information;
+	      std::thread _callback_thread;
 
-		std::promise<void> _running;
-		std::atomic<bool> _destory = { false };
-		bool _watching_single_file = { false };
+	      std::promise<void> _running;
+	      std::atomic<bool> _destory = {false};
+	      bool _watching_single_file = {false};
 
 #ifdef _WIN32
 		HANDLE _directory = { nullptr };
@@ -284,46 +292,53 @@ namespace filewatch {
 #endif // __unix__
 
 #if FILEWATCH_PLATFORM_MAC
-            struct FileState 
-            {
-                  int fd;
-                  uint32_t nlink;
-                  time_t last_modification;
+		struct FileState {
+			ino_t inode;
+			uint32_t nlink;
+			time_t last_modification;
+		};
+		struct DirectorySnapShot {
+			using states_t = std::unordered_map<fs::path, FileState>;
+			using paths_t = std::unordered_map<ino_t, fs::path>;
 
-                  FileState(int fd, uint32_t nlink, time_t lt) 
-                        : fd(fd), nlink(nlink), 
-                        last_modification(lt)
-                  {
+			states_t states;
+			paths_t paths;
 
-                  }
-                  FileState(const FileState&) = delete;
-                  FileState& operator=(const FileState&) = delete;
-                  FileState(FileState&& other) : fd(other.fd), nlink(other.nlink), last_modification(other.last_modification)
-                  {
-                        other.fd = -1;
-                  }
+			typename states_t::const_iterator find(fs::path const &path) const
+			{
+				return states.find(path);
+			}
 
-                  FileState invalidate_and_clone() {
-                        int fd = this->fd;
+			typename paths_t::const_iterator find(ino_t node) const
+			{
+				return paths.find(node);
+			}
 
-                        this->fd = -1;
-                        return FileState {fd, nlink, last_modification};
-                  }
+			void insert(fs::path const &path, FileState const &state)
+			{
+				if (paths.find(state.inode) != paths.end())
+					paths.erase(paths.find(state.inode));
+				states[path] = state;
+				paths[state.inode] = path;
+			}
 
-                  ~FileState() 
-                  {
-                        if (fd != -1) {
-                              close(fd);
-                        }
-                  }
-            };
-            std::unordered_map<StringType, FileState> _directory_snapshot{};
-            bool _previous_event_is_rename = false;
-            dispatch_queue_t _queue = nullptr;
-            int _file_fd = -1;
-            struct timespec _last_modification_time = {};
-            FSEventStreamRef _directory;
-            // fd for single file
+			void erase(fs::path const &path)
+			{
+				if (states.find(path) != states.end()) {
+					FileState &state = states.at(path);
+					paths.erase(state.inode);
+				}
+				states.erase(path);
+			}
+
+		} _directory_snapshot;
+
+		bool _previous_event_is_rename = false;
+		dispatch_queue_t _queue = nullptr;
+		// int _file_fd = -1;
+		struct timespec _last_modification_time = {};
+		FSEventStreamRef _directory;
+		// fd for single file
 #endif // FILEWATCH_PLATFORM_MAC
 
 		void init() 
@@ -398,7 +413,7 @@ namespace filewatch {
 			if (parent_path.empty()) {
 				parent_path = fs::current_path();
 			}
-			parent_path = fs::absolute(parent_path);
+			parent_path = fs::canonical(parent_path);
 
 			return PathParts{
 			    parent_path,
@@ -655,559 +670,186 @@ namespace filewatch {
 #endif // __unix__
 
 #if FILEWATCH_PLATFORM_MAC
-            static StringType absolute_path_of(const StringType& path) {
-                  char buf[PATH_MAX];
-                  int fd = open((const char*)path.c_str(), O_RDONLY);
-                  const char* str = buf;
-                  struct stat stat;
-                  mbstate_t state;
-
-                  assert(fd != -1);
-                  fcntl(fd, F_GETPATH, buf);
-                  fstat(fd, &stat);
-
-                  if (stat.st_mode & S_IFREG || stat.st_mode & S_IFLNK) {
-                        size_t len = strlen(buf);
-
-                        for (size_t i = len - 1; i >= 0; i--) {
-                              if (buf[i] == '/') {
-                                    buf[i] = '\0';
-                                    break;
-                              }
-                        }
-                  }
-                  close(fd);
-
-                  if (IsWChar<C>::value) {
-                        size_t needed = mbsrtowcs(nullptr, &str, 0, &state) + 1;
-                        StringType s;
-
-                        s.reserve(needed);
-                        mbsrtowcs((wchar_t*)&s[0], &str, s.size(), &state);
-                        return s;
-                  }
-                  return StringType {buf};
-            }
-#elif defined(__unix__)
-            static StringType absolute_path_of(const StringType& path) {
-                  char buf[PATH_MAX];
-                  const char* str = buf;
-                  struct stat stat;
-                  mbstate_t state;
-
-                  realpath((const char*)path.c_str(), buf);
-                  ::stat((const char*)path.c_str(), &stat);
-
-                  if (stat.st_mode & S_IFREG || stat.st_mode & S_IFLNK) {
-                        size_t len = strlen(buf);
-
-                        for (size_t i = len - 1; i >= 0; i--) {
-                              if (buf[i] == '/') {
-                                    buf[i] = '\0';
-                                    break;
-                              }
-                        }
-                  }
-
-                  if (IsWChar<C>::value) {
-                        size_t needed = mbsrtowcs(nullptr, &str, 0, &state) + 1;
-                        StringType s;
-
-                        s.reserve(needed);
-                        mbsrtowcs((wchar_t*)&s[0], &str, s.size(), &state);
-                        return s;
-                  }
-                  return StringType {buf};
-            }
-#elif _WIN32
-            static StringType absolute_path_of(const StringType& path) {
-                  constexpr size_t size = IsWChar<C>::value? MAX_PATH * sizeof(wchar_t) : 32767 * sizeof(wchar_t);
-                  char buf[size];
-
-                  DWORD length = IsWChar<C>::value? 
-                        GetFullPathNameW((LPCWSTR)path.c_str(), 
-                              size / sizeof(C),
-                              (LPWSTR)buf,
-                              nullptr) : 
-                        GetFullPathNameA((LPCSTR)path.c_str(), 
-                              size / sizeof(TCHAR),
-                              buf,
-                              nullptr);
-                  return StringType{(C*)buf, length};
-            }
-#endif
-
-#if FILEWATCH_PLATFORM_MAC
-            static StringType utf8StringToUtf32String(const char* buffer) {
-                  mbstate_t state{};
-                  StringType s{};
-
-                  size_t needed = mbsrtowcs(nullptr, &buffer, 0, &state) + 1;
-                  s.reserve(needed);
-                  mbsrtowcs((wchar_t*)&s[0], &buffer, s.size(), &state);
-                  return s;
-            }
-
-            template<typename Fn, class = std::enable_if<Invokable<Fn, StringType>::value>>
-            static void walkDirectory(const StringType& path, Fn callback) {
-                  int fd = open(path.c_str(), O_RDONLY);
-                  char buf[1024];
-                  long basep = 0;
-
-                  if (fd == -1) {
-                        return;
-                  }
-
-                  int ret = __getdirentries64(fd, buf, sizeof(buf), &basep);
-
-                  while (ret > 0) {
-                        char* current = buf;
-                        int offset = 0;
-
-                        while (offset < ret) {
-                              struct dirent* dirent = (struct dirent*)current;
-                              StringType name = IsWChar<C>::value? 
-                                    utf8StringToUtf32String(dirent->d_name) 
-                                    : StringType(dirent->d_name);
-                              
-                              callback(std::move(name));
-                              current += dirent->d_reclen;
-                              offset += dirent->d_reclen;
-                        }
-                        ret = __getdirentries64(fd, buf, sizeof(buf), &basep);
-                  }
-                  close(fd);
-            }
-
-            static StringType nameofFd(int fd) {
-                  size_t len = 0;
-                  char buf[MAXPATHLEN];
-
-                  if (fcntl(fd, F_GETPATH, buf) == -1) {
-                        return StringType{};
-                  }
-                  if (IsWChar<C>::value) {
-                        return utf8StringToUtf32String(buf);
-                  }
-
-                  len = strnlen(buf, MAXPATHLEN);
-                  for (int i = len - 1; i >= 0; i--) {
-                        if(buf[i] == '/') {
-                              return StringType{buf + i + 1, len - i - 1};
-                        }
-                  }
-                  return StringType{buf, len};
-            }
-
-            static StringType fullPathOfFd(int fd) {
-                  char buf[MAXPATHLEN];
-
-                  if (fcntl(fd, F_GETPATH, buf) == -1) {
-                        return StringType{};
-                  }
-                  if (IsWChar<C>::value) {
-                        return utf8StringToUtf32String(buf);
-                  }
-                  return StringType{(C*)buf};
-            }
-
-            static StringType pathOfFd(int fd) {
-                  size_t len = 0;
-                  char buf[MAXPATHLEN];
-
-                  if (fcntl(fd, F_GETPATH, buf) == -1) {
-                        return StringType{};
-                  }
-                  if (IsWChar<C>::value) {
-                        return utf8StringToUtf32String(buf);
-                  }
-
-                  len = strnlen(buf, MAXPATHLEN);
-                  for (int i = len - 1; i >= 0; i--) {
-                        if(buf[i] == '/') {
-                              return StringType{buf, static_cast<size_t>(i)};
-                        }
-                  }
-                  return StringType{buf, len};
-            }
-
-            static bool fdIsRemoved(int fd) {
-                  char buf[MAXPATHLEN];
-                  return fcntl(fd, F_GETPATH, buf) == -1;
-            }
-
-            FileState makeFileState(const StringType& path) {
-                  int fd = openFile(path);
-                  struct stat stat;
-
-                  fstat(fd, &stat);
-
-                  return FileState {
-                        openFile(path),
-                        stat.st_nlink,
-                        stat.st_mtimespec.tv_sec
-                  };
-            }
-
-            static StringType filenameOf(const StringType& file) {
-                  for (int i = file.size() - 1; i >= 0; i--) {
-                        if(file[i] == '/') {
-                              return file.substr(i + 1);
-                        }
-                  }
-                  return file;
-            }
-
-            static bool isInDirectory(const StringType& file, const StringType& path) {
-                  if (file.size() < path.size()) {
-                        return false;
-                  }
-                  return strncmp(file.data(), path.data(), path.size()) == 0;
-            }
-
-	    PathParts splitPath(const StringType &path)
-	    {
-		    return split_directory_and_file(path);
-
-		    // all it's doing here is remove the "/"
-		    // if (split.directory.size() > 0 && split.directory[split.directory.size() - 1] == '/') {
-		    //             split.directory.erase(split.directory.size() - 1);
-		    // }
-		    // return split;
-	    }
-
-	    fs::path fullPathOf(const fs::path &file)
-	    {
-		    return _path / file;
-	    }
-
-	    int openFile(const fs::path &file)
-	    {
-		    int fd = open(fullPathOf(file).c_str(), O_RDONLY);
-		    assert(fd != -1);
-		    return fd;
-	    }
-
-	    void walkAndSeeChanges() {
-                  struct RenamedPair {
-                        StringType old;
-                        StringType current;
-                  };
-                  struct EventInfo {
-                        StringType file;
-                        struct timespec time;
-                        Event event;
-                  };
-                  std::unordered_map<StringType, FileState> newSnapshot{};
-                  std::vector<EventInfo> events{};
-
-                  for (auto& entry : _directory_snapshot) {
-                        struct stat stat;
-
-                        fstat(entry.second.fd, &stat);
-                        if (fdIsRemoved(entry.second.fd)) {
-                              events.push_back(EventInfo{
-                                  .file = entry.first,
-                                  .time = stat.st_ctimespec,
-                                  .event = Event::removed,
-                              });
-                              continue;
-                        }
-
-                        StringType fullPath = fullPathOfFd(entry.second.fd);
-                        PathParts pathPair = splitPath(fullPath);
-
-                        if (pathPair.directory != _path) {
-                              events.push_back(EventInfo{
-                                  .file = entry.first,
-                                  .time = stat.st_ctimespec,
-                                  .event = Event::removed,
-                              });
-                              continue;
-                        }
-                        if (entry.first != pathPair.filename) {
-                              events.push_back(EventInfo{
-                                  .file = entry.first,
-                                  .time = stat.st_ctimespec,
-                                  .event = Event::renamed_old,
-                              });
-                              events.push_back(EventInfo{
-                                  .file = pathPair.filename,
-                                  .time = stat.st_ctimespec,
-                                  .event = Event::renamed_new,
-                              });
-                        }
-                        else {
-                              if (stat.st_mtimespec.tv_sec > entry.second.last_modification) {
-                                    entry.second.last_modification = stat.st_mtimespec.tv_sec;
-                                    events.push_back(EventInfo{
-                                        .file = pathPair.filename,
-                                        .time = stat.st_mtimespec,
-                                        .event = Event::modified,
-                                    });
-                              }
-                        }
-                        newSnapshot.insert(std::make_pair(std::move(pathPair.filename), 
-                              std::move(entry.second.invalidate_and_clone())));
-                  }
-
-                  walkDirectory(_path, [&](StringType file) {
-                        if (isParentOrSelfDirectory(file) || !std::regex_match(file, _pattern)) {
-                              return;
-                        }
-                        if (newSnapshot.count(file) == 0) {
-                              FileState state = makeFileState(file);
-                              struct stat stat;
-                              
-                              fstat(state.fd, &stat);
-                              events.push_back(EventInfo{
-                                  .file = file,
-                                  .time = stat.st_mtimespec,
-                                  .event = Event::added,
-                              });
-                              newSnapshot.insert(std::make_pair(file, std::move(state)));
-                        }
-                  });
-
-                  std::swap(_directory_snapshot, newSnapshot);
-
-                  std::sort(events.begin(), events.end(), [] (const EventInfo& a, EventInfo& b) {
-                        if (a.time.tv_sec == b.time.tv_sec) {
-                              return a.time.tv_nsec < b.time.tv_nsec;
-                        }
-                        return a.time.tv_sec < b.time.tv_sec;
-                  });
-
-                  {
-                        std::lock_guard<std::mutex> lock(_callback_mutex);
-                        
-                        for (const auto& event : events) {
-                              _callback_information.push_back(std::make_pair(event.file, event.event));
-                        }
-                  }
-                  _cv.notify_all();
-            }
-
-            void seeSingleFileChanges() {
-                  struct EventInfo {
-                        StringType file;
-                        Event event;
-                  };
-
-                  int eventCount = 1;
-                  EventInfo eventInfos[2];
-
-                  if (fdIsRemoved(_file_fd)) {
-                        eventInfos[0].event = Event::removed;
-                        eventInfos[0].file = _filename;
-                  }
-                  else {
-                        StringType absPath = pathOfFd(_file_fd);
-                        PathParts split = splitPath(absPath);
-
-                        if (split.directory != _path) {
-                              eventInfos[0].event = Event::removed;
-                              eventInfos[0].file = _filename;
-                        }
-                        else if (split.filename != _filename) {
-                              eventInfos[0].event = Event::renamed_old;
-                              eventInfos[0].file = std::move(_filename);
-                              eventInfos[1].event = Event::renamed_new;
-                              eventInfos[1].file = split.filename;
-                              eventCount = 2;
-                              _filename = std::move(split.filename);
-                        }
-                        else {
-                              struct stat stat;
-
-                              fstat(_file_fd, &stat);
-
-                              if (stat.st_mtimespec.tv_sec > _last_modification_time.tv_sec) {
-                                    eventInfos[0].event = Event::modified;
-                                    eventInfos[0].file = _filename;
-                                    _last_modification_time = stat.st_mtimespec;
-                              }
-                              else if (stat.st_mtimespec.tv_nsec > _last_modification_time.tv_nsec) {
-                                    eventInfos[0].event = Event::modified;
-                                    eventInfos[0].file = _filename;
-                                    _last_modification_time = stat.st_mtimespec;
-                              }
-                              else {
-                                    return;
-                              }
-                        }
-                  }
-
-                  {
-                        std::lock_guard<std::mutex> lock(_callback_mutex);
-                        for (int i = 0; i < eventCount; i++) {
-                              _callback_information.push_back(
-                                    std::make_pair(eventInfos[i].file, eventInfos[i].event));
-                        }
-                  }
-                  _cv.notify_all();
-            }
-
-            void notify(CFStringRef path, const FSEventStreamEventFlags flags) {
-                  CFIndex pathLength = CFStringGetLength(path);
-                  CFIndex written = 0;
-                  char buffer[PATH_MAX + 1];
-
-                  CFStringGetBytes(path, 
-                        CFRange {
-                              .location = 0,
-                              .length = pathLength,
-                        }, 
-                        IsWChar<C>::value? kCFStringEncodingUTF32 : kCFStringEncodingUTF8, 
-                        0, 
-                        false, 
-                        (UInt8*)buffer, 
-                        PATH_MAX, 
-                        &written);
-                  
-                  buffer[written] = 0;
-
-                  StringType absolutePath{(const C*)buffer, static_cast<size_t>(pathLength)};
-                  PathParts pathPair = splitPath(absolutePath);
-
-                  if (_watching_single_file && pathPair.filename != _filename) {
-                        return;
-		  }
-		  if (pathPair.directory != _path || !std::regex_match(StringType(pathPair.filename), _pattern)) {
-			  return;
-		  }
-
-		  Event event = Event::modified;
-                  if (_previous_event_is_rename) {
-                        event = Event::renamed_new;
-                        _directory_snapshot.insert(std::make_pair(pathPair.filename, 
-                              std::move(makeFileState(pathPair.filename))));
-                        _previous_event_is_rename = false;
-                  }
-                  else if (flags & kFSEventStreamEventFlagItemRenamed) {
-                        const auto state = _directory_snapshot.find(pathPair.filename);
-                        if (state != _directory_snapshot.end()) {
-                              StringType fdPath = pathOfFd(state->second.fd);
-
-                              // moved/delete to Trash folder
-                              if (!isInDirectory(absolutePath, fdPath)) {
-                                    event = Event::removed;
-                                    _directory_snapshot.erase(pathPair.filename);
-                              }
-                        } else {
-                              event = Event::renamed_old;
-                              _previous_event_is_rename = true;
-                        }
-                  }
-                  else if (flags & kFSEventStreamEventFlagItemCreated) {
-                        _directory_snapshot.insert(std::make_pair(pathPair.filename, 
-                              std::move(makeFileState(pathPair.filename))));
-                        event = Event::added;
-                  }
-                  else if (flags & kFSEventStreamEventFlagItemRemoved) {
-                        _directory_snapshot.erase(pathPair.filename);
-                        event = Event::removed;
-                  }
-
-                  {
-                        std::lock_guard<std::mutex> lock(_callback_mutex);
-                        _callback_information.push_back(std::make_pair(std::move(pathPair.filename), event));
-                  }
-                  _cv.notify_all();
-            }
-
-            static void handleFsEvent(__attribute__((unused)) ConstFSEventStreamRef streamFef, 
-                                          void* clientCallBackInfo, 
-                                          size_t numEvents, 
-                                          CFArrayRef eventPaths, 
-                                          const FSEventStreamEventFlags* eventFlags, 
-                                          __attribute__((unused)) const FSEventStreamEventId* eventIds) {
-                  FileWatch<StringType>* self = (FileWatch<StringType>*)clientCallBackInfo;
-
-                  for (size_t i = 0; i < numEvents; i++) {
-                        FSEventStreamEventFlags flag = eventFlags[i];
-                        CFStringRef path = (CFStringRef)CFArrayGetValueAtIndex(eventPaths, i);
-
-                        if (self->_watching_single_file) {
-                              self->seeSingleFileChanges();
-                        }
-                        else if (flag & kFSEventStreamEventFlagMustScanSubDirs) {
-                                    self->walkAndSeeChanges();
-                        }
-                        else {
-                              self->notify(path, flag);
-                        }
-                  }
-            }
-
-            FSEventStreamRef openStream(const StringType& directory) {
-                  CFStringEncoding encoding = IsWChar<C>::value? 
-                        kCFStringEncodingUTF32 : kCFStringEncodingASCII;
-                  CFStringRef path = CFStringCreateWithBytes(kCFAllocatorDefault, 
-                                          (const UInt8*)directory.data(), 
-                                          directory.size(), 
-                                          encoding, 
-                                          false);
-                  CFArrayRef paths = CFArrayCreate(
-                                          kCFAllocatorDefault, 
-                                          (const void**)&path, 
-                                          1, 
-                                          nullptr);
-                  FSEventStreamContext context {
-                        .info = (void*)this
-                  };
-                  FSEventStreamRef event = FSEventStreamCreate(
-                                    kCFAllocatorDefault, 
-                                    (FSEventStreamCallback)handleFsEvent, 
-                                    &context, 
-                                    paths, 
-                                    kFSEventStreamEventIdSinceNow, 
-                                    0, 
-                                    kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagFileEvents | 
-                                    kFSEventStreamCreateFlagUseCFTypes);
-
-                  CFRelease(path);
-                  CFRelease(paths);
-                  return event;
-            }
-
-            FSEventStreamRef openStreamForDirectory(const StringType& directory) {
-                  FSEventStreamRef stream = openStream(directory);
-                  walkDirectory(directory, [this] (StringType path) mutable {
-                        if (!isParentOrSelfDirectory(path) && std::regex_match(path, _pattern)) {
-                              _directory_snapshot.insert(std::make_pair(std::move(path), 
-                                                std::move(makeFileState(path))));
-                        }
-                  });
-                  return stream;
-            }
-
-            FSEventStreamRef openStreamForFile(const StringType& file) {
-                  PathParts split = splitPath(file);
-
-                  _watching_single_file = true;
-                  _filename = std::move(split.filename);
-                  _file_fd = openFile(file);
-                  return openStreamForDirectory(split.directory);
-            }
-
-            FSEventStreamRef get_directory(const StringType& directory) {
-                  struct stat stat;
-
-                  ::stat((const char*)directory.c_str(), &stat);
-                  if (stat.st_mode & S_IFDIR) {
-                        return openStreamForDirectory(directory);
-                  }
-                  _last_modification_time = stat.st_mtimespec;
-                  return openStreamForFile(directory);
-            }
-
-            void monitor_directory() {
-                  _queue = dispatch_queue_create("DirectoryWatcher", DISPATCH_QUEUE_SERIAL);
-                  FSEventStreamSetDispatchQueue(_directory, _queue);
-                  FSEventStreamStart(_directory);
-                  _running.set_value();
-            }
+		FileState makeFileState(fs::path const &path)
+		{
+			struct stat st{};
+
+			if (!path.is_absolute()) {
+				::stat(fs::canonical(path).c_str(), &st);
+			}
+			else {
+				::stat(path.c_str(), &st);
+			}
+			return FileState{st.st_ino, st.st_nlink, st.st_mtimespec.tv_sec};
+		}
+
+		void notify(const fs::path &path, const FSEventStreamEventFlags flags, ino_t inode)
+		{
+			std::vector<std::pair<fs::path, Event>> callbacks;
+			bool regex_matched = std::regex_match(path.filename().u8string(), _pattern);
+			fs::path parentPath = fs::is_directory(_path) ? _path : _path.parent_path();
+			fs::path relPath = fs::relative(path, parentPath);
+			if (relPath.empty()) {
+				return;
+			}
+
+			if (flags & kFSEventStreamEventFlagItemRenamed) {
+				const auto prevPath = _directory_snapshot.find(inode);
+				if (prevPath != _directory_snapshot.paths.end()) {
+					fs::path prevRelPath = fs::relative(prevPath->second, parentPath);
+					callbacks.emplace_back(std::make_pair(prevRelPath, Event::renamed_old));
+					callbacks.emplace_back(std::make_pair(relPath, Event::renamed_new));
+				}
+				_directory_snapshot.insert(path, makeFileState(path));
+			}
+			else if ((flags & kFSEventStreamEventFlagItemModified)) {
+				if (_directory_snapshot.find(path) != _directory_snapshot.states.end()) {
+					callbacks.emplace_back(std::make_pair(relPath, Event::modified));
+				}
+			}
+			else if ((flags & kFSEventStreamEventFlagItemCreated) &&
+			         regex_matched &&
+			         !_watching_single_file)
+			{
+				_directory_snapshot.insert(path, makeFileState(path));
+				callbacks.emplace_back(std::make_pair(relPath, Event::added));
+			}
+			else if (flags & kFSEventStreamEventFlagItemRemoved) {
+				if (_directory_snapshot.find(path) != _directory_snapshot.states.end()) {
+					_directory_snapshot.erase(path);
+					callbacks.emplace_back(std::make_pair(relPath, Event::removed));
+				}
+			}
+			{
+				std::lock_guard<std::mutex> lock(_callback_mutex);
+				_callback_information.insert(
+				    std::end(_callback_information), callbacks.begin(), callbacks.end());
+			}
+			_cv.notify_all();
+		}
+
+		static CFStringRef CFStringRefFromPath(const fs::path &path)
+		{
+			auto u8string = path.u8string(); // native format
+			return CFStringCreateWithBytes(kCFAllocatorDefault,
+			                               (const UInt8 *)u8string.data(),
+			                               u8string.size(),
+			                               kCFStringEncodingUTF8,
+			                               false);
+		}
+
+		static fs::path CFStringRefToPath(CFStringRef const &stringRef)
+		{
+			CFIndex length = CFStringGetLength(stringRef);
+			std::vector<char> buffer(length + 1);
+			CFStringGetCString(stringRef, buffer.data(), length + 1, kCFStringEncodingUTF8);
+			return fs::path(buffer.data());
+		}
+
+		static void handleFsEvent(__attribute__((unused)) ConstFSEventStreamRef streamFef,
+		                          void *clientCallBackInfo, size_t numEvents, CFArrayRef eventPaths,
+		                          const FSEventStreamEventFlags *eventFlags,
+		                          __attribute__((unused)) const FSEventStreamEventId *eventIds)
+		{
+			FileWatch<StringType> *self = (FileWatch<StringType> *)clientCallBackInfo;
+
+			for (size_t i = 0; i < numEvents; i++) {
+				FSEventStreamEventFlags flag = eventFlags[i];
+				// external data gives us the inode
+				auto pathInfoDict =
+				    static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex((CFArrayRef)eventPaths, i));
+				auto pathRef = static_cast<CFStringRef>(
+				    CFDictionaryGetValue(pathInfoDict, kFSEventStreamEventExtendedDataPathKey));
+				auto cfInode = static_cast<CFNumberRef>(
+				    CFDictionaryGetValue(pathInfoDict, kFSEventStreamEventExtendedFileIDKey));
+				unsigned long inode = 0;
+
+				if (cfInode) {
+					CFNumberGetValue(cfInode, kCFNumberLongType, &inode);
+				}
+				if (flag & (kFSEventStreamEventFlagMustScanSubDirs |
+				            kFSEventStreamEventFlagUserDropped |
+				            kFSEventStreamEventFlagKernelDropped))
+				{
+					continue; // ignore invalid events.
+				}
+				self->notify(CFStringRefToPath(pathRef), flag, inode);
+			}
+		}
+
+		FSEventStreamRef openStream(const fs::path &directory)
+		{
+			// Note that FSEventStreamCreate can only handle directories
+			CFStringRef path = CFStringRefFromPath(directory);
+			CFArrayRef paths = CFArrayCreate(kCFAllocatorDefault, (const void **)&path, 1, nullptr);
+			FSEventStreamContext context{.info = (void *)this};
+			FSEventStreamRef event = FSEventStreamCreate(kCFAllocatorDefault,
+			                                             (FSEventStreamCallback)handleFsEvent,
+			                                             &context,
+			                                             paths,
+			                                             kFSEventStreamEventIdSinceNow,
+			                                             0,
+			                                             (kFSEventStreamCreateFlagNoDefer |
+			                                              kFSEventStreamCreateFlagFileEvents |
+			                                              kFSEventStreamCreateFlagUseExtendedData |
+			                                              kFSEventStreamCreateFlagUseCFTypes));
+
+			CFRelease(path);
+			CFRelease(paths);
+			return event;
+		}
+
+		FSEventStreamRef openStreamForDirectory(const fs::path &directory)
+		{
+			FSEventStreamRef stream = openStream(directory);
+			// note that we could come from openStreamForFile.
+			if (fs::is_directory(directory) && !_watching_single_file) {
+				for (const auto &dir_entry : fs::directory_iterator{directory}) {
+					const auto &path = dir_entry.path();
+					if (std::regex_match(path.u8string(), _pattern)) {
+						_directory_snapshot.insert(path, makeFileState(path));
+					}
+				}
+			}
+			return stream;
+		}
+
+		FSEventStreamRef openStreamForFile(const fs::path &file)
+		{
+			PathParts split = split_directory_and_file(file);
+
+			_watching_single_file = true;
+			_filename = std::move(split.filename);
+			_directory_snapshot.insert(file, makeFileState(file));
+			return openStreamForDirectory(split.directory);
+		}
+
+		FSEventStreamRef get_directory(const fs::path &path)
+		{
+			if (fs::exists(path)) {
+				if (fs::is_directory(path)) {
+					return openStreamForDirectory(path);
+				}
+				else if (fs::is_regular_file(path)) {
+					return openStreamForFile(path);
+				}
+				else {
+					throw fs::filesystem_error(
+					    "file is not directory or regular file", path, std::error_code());
+				}
+			}
+			else {
+				throw fs::filesystem_error("file does not exist", path, std::error_code());
+			}
+		}
+
+		void monitor_directory()
+		{
+			_queue = dispatch_queue_create("DirectoryWatcher", DISPATCH_QUEUE_SERIAL);
+			FSEventStreamSetDispatchQueue(_directory, _queue);
+			FSEventStreamStart(_directory);
+			_running.set_value();
+		}
 #endif // FILEWATCH_PLATFORM_MAC
 
 		void callback_thread()

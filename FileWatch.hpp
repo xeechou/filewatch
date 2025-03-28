@@ -60,6 +60,8 @@
 #include <fcntl.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <unordered_map>
+#include <unordered_set>
 #endif
 
 #include <algorithm>
@@ -80,8 +82,6 @@
 #include <system_error>
 #include <thread>
 #include <type_traits>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -95,16 +95,6 @@ namespace filewatch {
 		renamed_new
 	};
       
-      template<typename StringType>
-      struct IsWChar {
-            static constexpr bool value = false;
-      };
-
-      template<> 
-      struct IsWChar<wchar_t> {
-            static constexpr bool value = true;
-      };
-
       template<typename Fn, typename... Args>
       struct Invokable {
             static Fn make() {
@@ -152,19 +142,15 @@ namespace filewatch {
        * \author Thomas Monkman
        *
        */
-      template <class StringType, class SubClass>
+      template <class SubClass>
       class FileWatchBase {
-	      typedef typename StringType::value_type C;
-	      typedef std::basic_string<C, std::char_traits<C>> UnderpinningString;
-	      typedef std::basic_regex<C, std::regex_traits<C>> UnderpinningRegex;
-
       public:
 	      ~FileWatchBase()
 	      {
 		      destroy();
 	      }
 
-	      FileWatchBase<StringType, SubClass> &operator=(const FileWatchBase<StringType, SubClass> &other)
+	      FileWatchBase &operator=(const FileWatchBase &other)
 	      {
 		      if (this == &other) {
 			      return *this;
@@ -194,8 +180,8 @@ namespace filewatch {
 	      }
 
       protected:
-	      static constexpr C _regex_all[] = {'.', '*', '\0'};
-	      static constexpr C _this_directory[] = {'.', '/', '\0'};
+	      static constexpr char _regex_all[] = {'.', '*', '\0'};
+	      static constexpr char _this_directory[] = {'.', '/', '\0'};
 
 	      struct PathParts {
 		      fs::path directory;
@@ -317,38 +303,22 @@ namespace filewatch {
 			}
 		}
       };
-
-      template <class StringType, class SubClass>
-      constexpr typename FileWatchBase<StringType, SubClass>::C FileWatchBase<StringType, SubClass>::_regex_all[];
-      template <class StringType, class SubClass>
-      constexpr typename FileWatchBase<StringType, SubClass>::C FileWatchBase<StringType, SubClass>::_this_directory[];
 } // namespace filewatch
 
 #if defined(FILEWATCH_PLATFORM_MAC)
 
 namespace filewatch {
-	// TODO the string template
-	class FileWatch : public FileWatchBase<std::string, FileWatch> {
-		friend FileWatchBase<std::string, FileWatch>;
+	class _FileWatch : public FileWatchBase<_FileWatch> {
+		friend FileWatchBase<_FileWatch>;
 
-	public:
-		FileWatch(fs::path const &path, std::regex const &pattern,
-		          std::function<void(const fs::path &file, const Event event_type)> callback)
-		    : FileWatchBase<std::string, FileWatch>(path, pattern, callback)
+	protected:
+		_FileWatch(fs::path const &path, std::regex const &pattern,
+		           std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatchBase<_FileWatch>(path, pattern, callback)
 		{
 			// it has to go here because base class cannot
 			// initialize subclass
 			this->init();
-		}
-
-		FileWatch(fs::path const &path,
-		          std::function<void(const fs::path &file, const Event event_type)> callback)
-		    : FileWatch(path, std::regex(this->_regex_all), callback)
-		{
-		}
-
-		FileWatch(const FileWatch &other) : FileWatch(other._path, other._callback)
-		{
 		}
 
 	private:
@@ -481,7 +451,7 @@ namespace filewatch {
 		                          const FSEventStreamEventFlags *eventFlags,
 		                          __attribute__((unused)) const FSEventStreamEventId *eventIds)
 		{
-			auto *self = (FileWatch *)clientCallBackInfo;
+			auto *self = (_FileWatch *)clientCallBackInfo;
 
 			for (size_t i = 0; i < numEvents; i++) {
 				FSEventStreamEventFlags flag = eventFlags[i];
@@ -598,27 +568,17 @@ namespace filewatch {
 #elif defined(FILEWATCH_PLATFORM_LINUX)
 
 namespace filewatch {
-	class FileWatch : public FileWatchBase<std::string, FileWatch> {
-		friend FileWatchBase<std::string, FileWatch>;
+	class _FileWatch : public FileWatchBase<_FileWatch> {
+		friend FileWatchBase<_FileWatch>;
 
 	public:
-		FileWatch(fs::path const &path, std::regex const &pattern,
-		          std::function<void(const fs::path &file, const Event event_type)> callback)
-		    : FileWatchBase<std::string, FileWatch>(path, pattern, callback)
+		_FileWatch(fs::path const &path, std::regex const &pattern,
+		           std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatchBase<_FileWatch>(path, pattern, callback)
 		{
 			// it has to go here because base class cannot
 			// initialize subclass
 			this->init();
-		}
-
-		FileWatch(fs::path const &path,
-		          std::function<void(const fs::path &file, const Event event_type)> callback)
-		    : FileWatch(path, std::regex(this->_regex_all), callback)
-		{
-		}
-
-		FileWatch(const FileWatch &other) : FileWatch(other._path, other._callback)
-		{
 		}
 
 	private:
@@ -707,29 +667,21 @@ namespace filewatch {
 		}
 	};
 } // namespace filewatch
-#elif defined(FILEWATCH_PLATFORM_WIN)
-namespace filewatch {
-	class FileWatch : public FileWatchBase<std::string, FileWatch> {
-		friend FileWatchBase<std::string, FileWatch>;
 
-	public:
-		FileWatch(fs::path const &path, std::regex const &pattern,
-		          std::function<void(const fs::path &file, const Event event_type)> callback)
-		    : FileWatchBase<std::string, FileWatch>(path, pattern, callback)
+#elif defined(FILEWATCH_PLATFORM_WIN)
+
+namespace filewatch {
+	class _FileWatch : public FileWatchBase<_FileWatch> {
+		friend FileWatchBase<_FileWatch>;
+
+	protected:
+		_FileWatch(fs::path const &path, std::regex const &pattern,
+		           std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatchBase<_FileWatch>(path, pattern, callback)
 		{
 			// it has to go here because base class cannot
 			// initialize subclass
 			this->init();
-		}
-
-		FileWatch(fs::path const &path,
-		          std::function<void(const fs::path &file, const Event event_type)> callback)
-		    : FileWatch(path, std::regex(this->_regex_all), callback)
-		{
-		}
-
-		FileWatch(const FileWatch &other) : FileWatch(other._path, other._callback)
-		{
 		}
 
 	private:
@@ -904,5 +856,25 @@ namespace filewatch {
 } // namespace filewatch
 
 #endif
+
+namespace filewatch {
+	class FileWatch : public _FileWatch {
+	public:
+		FileWatch(fs::path const &path, std::regex const &pattern,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : _FileWatch(path, pattern, callback)
+		{
+		}
+		FileWatch(fs::path const &path,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatch(path, std::regex(this->_regex_all), callback)
+		{
+		}
+
+		FileWatch(const FileWatch &other) : FileWatch(other._path, other._callback)
+		{
+		}
+	};
+} // namespace filewatch
 
 #endif

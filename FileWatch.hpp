@@ -159,7 +159,7 @@ namespace filewatch {
        * \author Thomas Monkman
        *
        */
-      template <class StringType>
+template <class StringType, class SubClass>
       class FileWatchBase {
 	      typedef typename StringType::value_type C;
 	      typedef std::basic_string<C, std::char_traits<C>> UnderpinningString;
@@ -180,7 +180,7 @@ namespace filewatch {
 
 	      // without filter
 	      FileWatchBase(fs::path path, std::function<void(const fs::path &file, const Event event_type)> callback)
-		  : FileWatchBase<StringType>(path, UnderpinningRegex(_regex_all), callback)
+		      : FileWatchBase<StringType, SubClass>(path, UnderpinningRegex(_regex_all), callback)
 	      {
 	      }
 
@@ -189,11 +189,11 @@ namespace filewatch {
 		      destroy();
 	      }
 
-	      FileWatchBase(const FileWatchBase<StringType> &other) : FileWatchBase<StringType>(other._path, other._callback)
+	FileWatchBase(const FileWatchBase<StringType, SubClass> &other) : FileWatchBase<StringType, SubClass>(other._path, other._callback)
 	      {
 	      }
 
-	      FileWatchBase<StringType> &operator=(const FileWatchBase<StringType> &other)
+	FileWatchBase<StringType, SubClass> &operator=(const FileWatchBase<StringType, SubClass> &other)
 	      {
 		      if (this == &other) {
 			      return *this;
@@ -209,8 +209,8 @@ namespace filewatch {
 
 	      // Const memeber varibles don't let me implent moves nicely, if moves are really wanted std::unique_ptr
 	      // should be used and move that.
-	      FileWatchBase<StringType>(FileWatchBase<StringType> &&) = delete;
-	      FileWatchBase<StringType> &operator=(FileWatchBase<StringType> &&) & = delete;
+	FileWatchBase<StringType>(FileWatchBase<StringType, SubClass> &&) = delete;
+	FileWatchBase<StringType, SubClass> &operator=(FileWatchBase<StringType, SubClass> &&) & = delete;
       protected:
 	      static constexpr C _regex_all[] = {'.', '*', '\0'};
 	      static constexpr C _this_directory[] = {'.', '/', '\0'};
@@ -738,7 +738,8 @@ namespace filewatch {
 		                          const FSEventStreamEventFlags *eventFlags,
 		                          __attribute__((unused)) const FSEventStreamEventId *eventIds)
 		{
-			FileWatchBase<StringType> *self = (FileWatchBase<StringType> *)clientCallBackInfo;
+			FileWatchBase<StringType, SubClass> *self =
+			    (FileWatchBase<StringType, SubClass> *)clientCallBackInfo;
 
 			for (size_t i = 0; i < numEvents; i++) {
 				FSEventStreamEventFlags flag = eventFlags[i];
@@ -865,7 +866,7 @@ namespace filewatch {
 		}
 	};
 
-	template<class StringType> constexpr typename FileWatchBase<StringType>::C FileWatchBase<StringType>::_regex_all[];
-	template<class StringType> constexpr typename FileWatchBase<StringType>::C FileWatchBase<StringType>::_this_directory[];
+template<class StringType, class SubClass> constexpr typename FileWatchBase<StringType, SubClass>::C FileWatchBase<StringType, SubClass>::_regex_all[];
+template<class StringType, class SubClass> constexpr typename FileWatchBase<StringType, SubClass>::C FileWatchBase<StringType, SubClass>::_this_directory[];
 }
 #endif

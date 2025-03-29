@@ -25,18 +25,22 @@
 
 #include <cstdio>
 #include <fstream>
+
 #ifdef _WIN32
+#define FILEWATCH_PLATFORM_WIN
 #define WIN32_LEAN_AND_MEAN
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <tchar.h>
+
 #include <Pathcch.h>
 #include <shlwapi.h>
-#endif // WIN32
+#include <stdio.h>
+#include <stdlib.h>
+#include <tchar.h>
+
+#endif
 
 #if defined(FILEWATCH_PLATFORM_LINUX)
 #include <dirent.h>
@@ -204,7 +208,7 @@ namespace filewatch {
 	      // only used if watch a single file
 	      fs::path _filename;
 
-	      std::function<void(const StringType &file, const Event event_type)> _callback;
+	      std::function<void(const fs::path &file, const Event event_type)> _callback;
 
 	      std::thread _watch_thread;
 
@@ -217,29 +221,6 @@ namespace filewatch {
 	      std::atomic<bool> _destory = {false};
 	      bool _watching_single_file = {false};
 
-#ifdef _WIN32
-		HANDLE _directory = { nullptr };
-		HANDLE _close_event = { nullptr };
-
-		const DWORD _listen_filters =
-			FILE_NOTIFY_CHANGE_SECURITY |
-			FILE_NOTIFY_CHANGE_CREATION |
-			FILE_NOTIFY_CHANGE_LAST_ACCESS |
-			FILE_NOTIFY_CHANGE_LAST_WRITE |
-			FILE_NOTIFY_CHANGE_SIZE |
-			FILE_NOTIFY_CHANGE_ATTRIBUTES |
-			FILE_NOTIFY_CHANGE_DIR_NAME |
-			FILE_NOTIFY_CHANGE_FILE_NAME;
-
-		const std::unordered_map<DWORD, Event> _event_type_mapping = {
-			{ FILE_ACTION_ADDED, Event::added },
-			{ FILE_ACTION_REMOVED, Event::removed },
-			{ FILE_ACTION_MODIFIED, Event::modified },
-			{ FILE_ACTION_RENAMED_OLD_NAME, Event::renamed_old },
-			{ FILE_ACTION_RENAMED_NEW_NAME, Event::renamed_new }
-		};
-#endif // WIN32
-
 #if FILEWATCH_PLATFORM_MAC
 
 #endif // FILEWATCH_PLATFORM_MAC
@@ -247,12 +228,6 @@ namespace filewatch {
 		void init()
 		{
 			static_cast<SubClass *>(this)->get_directory(_path);
-#ifdef _WIN32
-			_close_event = CreateEvent(NULL, TRUE, FALSE, NULL);
-			if (!_close_event) {
-				throw std::system_error(GetLastError(), std::system_category());
-			}
-#endif // WIN32
 
 			_callback_thread = std::thread([this]() {
 				try {
@@ -290,17 +265,10 @@ namespace filewatch {
 			_running = std::promise<void>();
 
 			static_cast<SubClass *>(this)->close();
-#ifdef _WIN32
-			SetEvent(_close_event);
-#endif // __unix__
 
 			_cv.notify_all();
 			_watch_thread.join();
 			_callback_thread.join();
-
-#ifdef _WIN32
-			CloseHandle(_directory);
-#endif
 
 			static_cast<SubClass *>(this)->destroy();
 		}
@@ -320,163 +288,11 @@ namespace filewatch {
 			};
 		}
 
-		bool pass_filter(const UnderpinningString& file_path)
-		{ 
-			if (_watching_single_file) {
-				const UnderpinningString extracted_filename = { split_directory_and_file(file_path).filename };
-				//if we are watching a single file, only that file should trigger action
-				return extracted_filename == _filename;
-			}
-			return std::regex_match(file_path, _pattern);
-		}
-
-#ifdef _WIN32
-		template<typename... Args> DWORD GetFileAttributesX(const char* lpFileName, Args... args) {
-			return GetFileAttributesA(lpFileName, args...);
-		}
-		template<typename... Args> DWORD GetFileAttributesX(const wchar_t* lpFileName, Args... args) {
-			return GetFileAttributesW(lpFileName, args...);
-		}
-
-		template<typename... Args> HANDLE CreateFileX(const char* lpFileName, Args... args) {
-			return CreateFileA(lpFileName, args...);
-		}
-		template<typename... Args> HANDLE CreateFileX(const wchar_t* lpFileName, Args... args) {
-			return CreateFileW(lpFileName, args...);
-		}
-
-		void get_directory(const StringType& path)
+		bool pass_filter(const fs::path &file_path)
 		{
-			auto file_info = GetFileAttributesX(path.c_str());
-
-			if (file_info == INVALID_FILE_ATTRIBUTES)
-			{
-				throw std::system_error(GetLastError(), std::system_category());
-			}
-			_watching_single_file = (file_info & FILE_ATTRIBUTE_DIRECTORY) == false;
-
-			const StringType watch_path = [this, &path]() {
-				if (_watching_single_file)
-				{
-					const auto parsed_path = split_directory_and_file(path);
-					_filename = parsed_path.filename;
-					return parsed_path.directory;
-				}
-				else 
-				{
-					return path;
-				}
-			}();
-
-			HANDLE directory = CreateFileX(
-				watch_path.c_str(),           // pointer to the file name
-				FILE_LIST_DIRECTORY,    // access (read/write) mode
-				FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, // share mode
-				nullptr, // security descriptor
-				OPEN_EXISTING,         // how to create
-				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, // file attributes
-				HANDLE(0));                 // file with attributes to copy
-
-			if (directory == INVALID_HANDLE_VALUE)
-			{
-				throw std::system_error(GetLastError(), std::system_category());
-			}
-			_directory = directory;
+			return (_watching_single_file) ? file_path.filename() == _filename
+			                               : std::regex_match(file_path.u8string(), _pattern);
 		}
-
-		void convert_wstring(const std::wstring& wstr, std::string& out)
-		{
-			int size_needed = WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), NULL, 0, NULL, NULL);
-			out.resize(size_needed, '\0');
-			WideCharToMultiByte(CP_UTF8, 0, &wstr[0], (int)wstr.size(), &out[0], size_needed, NULL, NULL);
-		}
-
-		void convert_wstring(const std::wstring& wstr, std::wstring& out)
-		{
-			out = wstr;
-		}
-
-		void monitor_directory() 
-		{
-			std::vector<BYTE> buffer(_buffer_size);
-			DWORD bytes_returned = 0;
-			OVERLAPPED overlapped_buffer{ 0 };
-
-			overlapped_buffer.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
-			if (!overlapped_buffer.hEvent) {
-				std::cerr << "Error creating monitor event" << std::endl;
-			}
-
-			std::array<HANDLE, 2> handles{ overlapped_buffer.hEvent, _close_event };
-
-			auto async_pending = false;
-			_running.set_value();
-			do {
-				std::vector<std::pair<StringType, Event>> parsed_information;
-				ReadDirectoryChangesW(
-					_directory,
-					buffer.data(), static_cast<DWORD>(buffer.size()),
-					TRUE,
-					_listen_filters,
-					&bytes_returned,
-					&overlapped_buffer, NULL);
-			
-				async_pending = true;
-			
-				switch (WaitForMultipleObjects(2, handles.data(), FALSE, INFINITE))
-				{
-				case WAIT_OBJECT_0:
-				{
-					if (!GetOverlappedResult(_directory, &overlapped_buffer, &bytes_returned, TRUE)) {
-						throw std::system_error(GetLastError(), std::system_category());
-					}
-					async_pending = false;
-
-					if (bytes_returned == 0) {
-						break;
-					}
-
-					FILE_NOTIFY_INFORMATION *file_information = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(&buffer[0]);
-					do
-					{
-						std::wstring changed_file_w{ file_information->FileName, file_information->FileNameLength / sizeof(file_information->FileName[0]) };
-						UnderpinningString changed_file;
-						convert_wstring(changed_file_w, changed_file);
-						if (pass_filter(changed_file))
-						{
-							parsed_information.emplace_back(StringType{ changed_file }, _event_type_mapping.at(file_information->Action));
-						}
-
-						if (file_information->NextEntryOffset == 0) {
-							break;
-						}
-
-						file_information = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(reinterpret_cast<BYTE*>(file_information) + file_information->NextEntryOffset);
-					} while (true);
-					break;
-				}
-				case WAIT_OBJECT_0 + 1:
-					// quit
-					break;
-				case WAIT_FAILED:
-					break;
-				}
-				//dispatch callbacks
-				{
-					std::lock_guard<std::mutex> lock(_callback_mutex);
-					_callback_information.insert(_callback_information.end(), parsed_information.begin(), parsed_information.end());
-				}
-				_cv.notify_all();
-			} while (_destory == false);
-
-			if (async_pending)
-			{
-				//clean up running async io
-				CancelIo(_directory);
-				GetOverlappedResult(_directory, &overlapped_buffer, &bytes_returned, TRUE);
-			}
-		}
-#endif // WIN32
 
 		void callback_thread()
 		{
@@ -888,6 +704,201 @@ namespace filewatch {
 					_cv.notify_all();
 				}
 			}
+		}
+	};
+} // namespace filewatch
+#elif defined(FILEWATCH_PLATFORM_WIN)
+namespace filewatch {
+	class FileWatch : public FileWatchBase<std::string, FileWatch> {
+		friend FileWatchBase<std::string, FileWatch>;
+
+	public:
+		FileWatch(fs::path const &path, std::regex const &pattern,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatchBase<std::string, FileWatch>(path, pattern, callback)
+		{
+			// it has to go here because base class cannot
+			// initialize subclass
+			this->init();
+		}
+
+		FileWatch(fs::path const &path,
+		          std::function<void(const fs::path &file, const Event event_type)> callback)
+		    : FileWatch(path, std::regex(this->_regex_all), callback)
+		{
+		}
+
+		FileWatch(const FileWatch &other) : FileWatch(other._path, other._callback)
+		{
+		}
+
+	private:
+		HANDLE _directory = {nullptr};
+		HANDLE _close_event = {nullptr};
+
+		const DWORD _listen_filters = FILE_NOTIFY_CHANGE_SECURITY | FILE_NOTIFY_CHANGE_CREATION |
+		                              FILE_NOTIFY_CHANGE_LAST_ACCESS | FILE_NOTIFY_CHANGE_LAST_WRITE |
+		                              FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_ATTRIBUTES |
+		                              FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_FILE_NAME;
+
+		const std::unordered_map<DWORD, Event> _event_type_mapping = {
+		    {FILE_ACTION_ADDED, Event::added},
+		    {FILE_ACTION_REMOVED, Event::removed},
+		    {FILE_ACTION_MODIFIED, Event::modified},
+		    {FILE_ACTION_RENAMED_OLD_NAME, Event::renamed_old},
+		    {FILE_ACTION_RENAMED_NEW_NAME, Event::renamed_new}};
+		static constexpr std::size_t _buffer_size = {1024 * 256};
+
+	private:
+		template <typename... Args> DWORD GetFileAttributesX(const char *lpFileName, Args... args)
+		{
+			return GetFileAttributesA(lpFileName, args...);
+		}
+		template <typename... Args> DWORD GetFileAttributesX(const wchar_t *lpFileName, Args... args)
+		{
+			return GetFileAttributesW(lpFileName, args...);
+		}
+
+		template <typename... Args> HANDLE CreateFileX(const char *lpFileName, Args... args)
+		{
+			return CreateFileA(lpFileName, args...);
+		}
+		template <typename... Args> HANDLE CreateFileX(const wchar_t *lpFileName, Args... args)
+		{
+			return CreateFileW(lpFileName, args...);
+		}
+
+		void get_directory(const fs::path &path)
+		{
+			_close_event = CreateEvent(NULL, TRUE, FALSE, NULL);
+			if (!_close_event) {
+				throw std::system_error(GetLastError(), std::system_category());
+			}
+
+			auto file_info = GetFileAttributesX(path.c_str());
+
+			if (file_info == INVALID_FILE_ATTRIBUTES) {
+				throw std::system_error(GetLastError(), std::system_category());
+			}
+			this->_watching_single_file = (file_info & FILE_ATTRIBUTE_DIRECTORY) == false;
+
+			const fs::path watch_path = [this, &path]()
+			{
+				if (_watching_single_file) {
+					const auto parsed_path = split_directory_and_file(path);
+					_filename = parsed_path.filename;
+					return parsed_path.directory;
+				}
+				else {
+					return path;
+				}
+			}();
+
+			HANDLE directory =
+			    CreateFileX(watch_path.c_str(),  // pointer to the file name
+			                FILE_LIST_DIRECTORY, // access (read/write) mode
+			                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, // share mode
+			                nullptr,                                                // security descriptor
+			                OPEN_EXISTING,                                          // how to create
+			                FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,      // file attributes
+			                HANDLE(0)); // file with attributes to copy
+
+			if (directory == INVALID_HANDLE_VALUE) {
+				throw std::system_error(GetLastError(), std::system_category());
+			}
+			_directory = directory;
+		}
+
+		void monitor_directory()
+		{
+			std::vector<BYTE> buffer(_buffer_size);
+			DWORD bytes_returned = 0;
+			OVERLAPPED overlapped_buffer{ 0 };
+
+			overlapped_buffer.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+			if (!overlapped_buffer.hEvent) {
+				// std::cerr << "Error creating monitor event" << std::endl;
+			}
+
+			std::array<HANDLE, 2> handles{ overlapped_buffer.hEvent, _close_event };
+
+			auto async_pending = false;
+			_running.set_value();
+			do {
+				std::vector<std::pair<fs::path, Event>> parsed_information;
+				ReadDirectoryChangesW(_directory,
+				                      buffer.data(),
+				                      static_cast<DWORD>(buffer.size()),
+				                      TRUE,
+				                      _listen_filters,
+				                      &bytes_returned,
+				                      &overlapped_buffer,
+				                      NULL);
+
+				async_pending = true;
+
+				switch (WaitForMultipleObjects(2, handles.data(), FALSE, INFINITE)) {
+				case WAIT_OBJECT_0:
+				{
+					if (!GetOverlappedResult(_directory, &overlapped_buffer, &bytes_returned, TRUE)) {
+						throw std::system_error(GetLastError(), std::system_category());
+					}
+					async_pending = false;
+
+					if (bytes_returned == 0) {
+						break;
+					}
+
+					FILE_NOTIFY_INFORMATION *file_information = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(&buffer[0]);
+					do
+					{
+						std::wstring changed_file_w{file_information->FileName,
+						                            file_information->FileNameLength /
+						                                sizeof(file_information->FileName[0])};
+						fs::path changed_file(changed_file_w);
+
+						if (pass_filter(changed_file)) {
+							parsed_information.emplace_back(changed_file, _event_type_mapping.at(file_information->Action));
+						}
+
+						if (file_information->NextEntryOffset == 0) {
+							break;
+						}
+
+						file_information = reinterpret_cast<FILE_NOTIFY_INFORMATION*>(reinterpret_cast<BYTE*>(file_information) + file_information->NextEntryOffset);
+					} while (true);
+					break;
+				}
+				case WAIT_OBJECT_0 + 1:
+					// quit
+					break;
+				case WAIT_FAILED:
+					break;
+				}
+				//dispatch callbacks
+				{
+					std::lock_guard<std::mutex> lock(_callback_mutex);
+					_callback_information.insert(_callback_information.end(), parsed_information.begin(), parsed_information.end());
+				}
+				_cv.notify_all();
+			} while (_destory == false);
+
+			if (async_pending)
+			{
+				//clean up running async io
+				CancelIo(_directory);
+				GetOverlappedResult(_directory, &overlapped_buffer, &bytes_returned, TRUE);
+			}
+		}
+
+		void close()
+		{
+			SetEvent(_close_event);
+		}
+
+		void destroy()
+		{
+			CloseHandle(_directory);
 		}
 	};
 } // namespace filewatch

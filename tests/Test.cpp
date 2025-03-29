@@ -23,6 +23,7 @@ using test_regex = std::regex;
 #include <algorithm>
 #include <filesystem>
 #include <future>
+#include <iostream>
 #include <mutex>
 #include <set>
 #include <thread>
